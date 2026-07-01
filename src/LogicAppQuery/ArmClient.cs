@@ -11,10 +11,31 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
     const string ArmBase = "https://management.azure.com";
     const long MaxInputSizeBytes = 5 * 1024 * 1024; // 5 MB
 
+    private AccessToken? _cachedToken;
+    private readonly SemaphoreSlim _tokenLock = new SemaphoreSlim(1, 1);
+
     async ValueTask<string> GetBearerTokenAsync(CancellationToken ct)
     {
-        var token = await credential.GetTokenAsync(new TokenRequestContext([ArmScope]), ct);
-        return token.Token;
+        if (_cachedToken.HasValue && _cachedToken.Value.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(5))
+        {
+            return _cachedToken.Value.Token;
+        }
+
+        await _tokenLock.WaitAsync(ct);
+        try
+        {
+            if (_cachedToken.HasValue && _cachedToken.Value.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(5))
+            {
+                return _cachedToken.Value.Token;
+            }
+
+            _cachedToken = await credential.GetTokenAsync(new TokenRequestContext([ArmScope]), ct);
+            return _cachedToken.Value.Token;
+        }
+        finally
+        {
+            _tokenLock.Release();
+        }
     }
 
     async Task<T> GetArmJsonAsync<T>(string url, CancellationToken ct)
@@ -160,12 +181,18 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
             return await TryFetchAsync(link.Uri, null, ct);
         }
 
-        var bearer = await GetBearerTokenAsync(ct);
+        if (Uri.TryCreate(link.Uri, UriKind.Absolute, out var parsedUri) &&
+            parsedUri.Host.Equals("management.azure.com", StringComparison.OrdinalIgnoreCase))
+        {
+            var bearer = await GetBearerTokenAsync(ct);
 
-        // Try with bearer token first (ARM management content URLs).
-        // If that fails, try without auth as a fallback.
-        return await TryFetchAsync(link.Uri, bearer, ct)
-            ?? await TryFetchAsync(link.Uri, null, ct);
+            // Try with bearer token first (ARM management content URLs).
+            // If that fails, try without auth as a fallback.
+            return await TryFetchAsync(link.Uri, bearer, ct)
+                ?? await TryFetchAsync(link.Uri, null, ct);
+        }
+
+        return await TryFetchAsync(link.Uri, null, ct);
     }
 
     async Task<string?> TryFetchAsync(string uri, string? bearer, CancellationToken ct)
