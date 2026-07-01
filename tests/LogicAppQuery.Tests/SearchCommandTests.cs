@@ -6,6 +6,44 @@ namespace LogicAppQuery.Tests;
 
 public class SearchCommandTests
 {
+    private class FakeFailingArmClient : IArmClient
+    {
+        public Task<string> DiscoverResourceGroupAsync(string subscriptionId, string appName, CancellationToken ct)
+        {
+            throw new Exception("Simulated discovery failure");
+        }
+
+        public IAsyncEnumerable<WorkflowRun> ListRunsAsync(string subscriptionId, string resourceGroup, string appName, string workflowName, DateTimeOffset? start, DateTimeOffset? end, CancellationToken ct = default)
+        {
+            throw new NotImplementedException();
+        }
+
+        public IAsyncEnumerable<WorkflowAction> ListActionsAsync(string subscriptionId, string resourceGroup, string appName, string workflowName, string runName, CancellationToken ct = default)
+        {
+            throw new NotImplementedException();
+        }
+
+        public Task<string?> FetchContentAsync(ContentLink link, CancellationToken ct)
+        {
+            throw new NotImplementedException();
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ResourceGroupDiscoveryFails_ReturnsGracefully()
+    {
+        // Arrange
+        var fakeClient = new FakeFailingArmClient();
+        var command = new SearchCommand(fakeClient);
+
+        // Act & Assert
+        // We expect it to write the error to console and return without throwing
+        var ex = await Record.ExceptionAsync(() => command.ExecuteAsync(
+            "subId", "appName", "workflowName", "search", null, null, CancellationToken.None));
+
+        Assert.Null(ex); // Ensures it returns gracefully and doesn't crash
+    }
+
     [Fact]
     public void BuildSnippet_TermNotFound_ReturnsEmptyString()
     {
