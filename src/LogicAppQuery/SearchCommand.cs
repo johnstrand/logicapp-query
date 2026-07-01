@@ -178,7 +178,7 @@ internal sealed class SearchCommand(ArmClient armClient)
             parts.Add(el.GetRawText());
     }
 
-    static string BuildSnippet(string content, string searchTerm)
+    internal static string BuildSnippet(string content, string searchTerm)
     {
         var idx = content.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase);
         if (idx < 0) return string.Empty;
