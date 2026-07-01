@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "LogicAppQuery": {
+      "commandName": "Project",
+      "commandLineArgs": "-s 4e07a1c3-c65e-419c-9534-167307e91758 -t 62043f0b-c72b-4efa-8055-8e4fc3f4cca1 -a srk-prd-crm -w send-kb-article -q \"ec9cd0e5\""
+    }
+  }
+}

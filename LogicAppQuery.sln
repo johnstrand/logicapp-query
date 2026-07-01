@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.4.11626.88 stable
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LogicAppQuery", "LogicAppQuery.csproj", "{D09E45EC-7EE6-EF68-2259-4469DF916C60}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{D09E45EC-7EE6-EF68-2259-4469DF916C60}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D09E45EC-7EE6-EF68-2259-4469DF916C60}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D09E45EC-7EE6-EF68-2259-4469DF916C60}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D09E45EC-7EE6-EF68-2259-4469DF916C60}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {FAF397FA-65A5-43F8-A364-1E467FA029EA}
+	EndGlobalSection
+EndGlobal
