@@ -11,10 +11,31 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
     const string ArmBase = "https://management.azure.com";
     const long MaxInputSizeBytes = 5 * 1024 * 1024; // 5 MB
 
+    private AccessToken? _cachedToken;
+    private readonly SemaphoreSlim _tokenLock = new SemaphoreSlim(1, 1);
+
     async ValueTask<string> GetBearerTokenAsync(CancellationToken ct)
     {
-        var token = await credential.GetTokenAsync(new TokenRequestContext([ArmScope]), ct);
-        return token.Token;
+        if (_cachedToken.HasValue && _cachedToken.Value.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(5))
+        {
+            return _cachedToken.Value.Token;
+        }
+
+        await _tokenLock.WaitAsync(ct);
+        try
+        {
+            if (_cachedToken.HasValue && _cachedToken.Value.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(5))
+            {
+                return _cachedToken.Value.Token;
+            }
+
+            _cachedToken = await credential.GetTokenAsync(new TokenRequestContext([ArmScope]), ct);
+            return _cachedToken.Value.Token;
+        }
+        finally
+        {
+            _tokenLock.Release();
+        }
     }
 
     async Task<T> GetArmJsonAsync<T>(string url, CancellationToken ct)
