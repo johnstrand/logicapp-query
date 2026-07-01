@@ -3,10 +3,16 @@ using System.Text.Json.Serialization;
 
 namespace LogicAppQuery;
 
+internal interface IPageableResponse<T>
+{
+    List<T> Value { get; }
+    string? NextLink { get; }
+}
+
 internal record ResourceListResponse(
     [property: JsonPropertyName("value")] List<ResourceItem> Value,
     [property: JsonPropertyName("nextLink")] string? NextLink
-);
+) : IPageableResponse<ResourceItem>;
 
 internal record ResourceItem(
     [property: JsonPropertyName("id")] string Id,
@@ -16,7 +22,7 @@ internal record ResourceItem(
 internal record RunsListResponse(
     [property: JsonPropertyName("value")] List<WorkflowRun> Value,
     [property: JsonPropertyName("nextLink")] string? NextLink
-);
+) : IPageableResponse<WorkflowRun>;
 
 internal record WorkflowRun(
     [property: JsonPropertyName("id")] string Id,
@@ -45,7 +51,7 @@ internal record ContentLink(
 internal record ActionListResponse(
     [property: JsonPropertyName("value")] List<WorkflowAction> Value,
     [property: JsonPropertyName("nextLink")] string? NextLink
-);
+) : IPageableResponse<WorkflowAction>;
 
 internal record WorkflowAction(
     [property: JsonPropertyName("name")] string Name,

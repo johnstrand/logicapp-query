@@ -69,6 +69,22 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
             ?? throw new InvalidOperationException("Null response from ARM API.");
     }
 
+    async IAsyncEnumerable<TItem> GetPaginatedAsync<TResponse, TItem>(
+        string url,
+        [EnumeratorCancellation] CancellationToken ct)
+        where TResponse : IPageableResponse<TItem>
+    {
+        string? nextUrl = url;
+        while (nextUrl is not null)
+        {
+            ct.ThrowIfCancellationRequested();
+            var page = await GetArmJsonAsync<TResponse>(nextUrl, ct);
+            foreach (var item in page.Value)
+                yield return item;
+            nextUrl = page.NextLink;
+        }
+    }
+
     public async Task<string> DiscoverResourceGroupAsync(string subscriptionId, string appName, CancellationToken ct)
     {
         var filter = Uri.EscapeDataString($"name eq '{appName}' and resourceType eq 'Microsoft.Web/sites'");
@@ -114,14 +130,14 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
         throw new InvalidOperationException($"Could not extract resource group from resource ID: {resourceId}");
     }
 
-    public async IAsyncEnumerable<WorkflowRun> ListRunsAsync(
+    public IAsyncEnumerable<WorkflowRun> ListRunsAsync(
         string subscriptionId,
         string resourceGroup,
         string appName,
         string workflowName,
         DateTimeOffset? start,
         DateTimeOffset? end,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        CancellationToken ct = default)
     {
         var url = $"{ArmBase}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resourceGroups/{Uri.EscapeDataString(resourceGroup)}" +
                   $"/providers/Microsoft.Web/sites/{Uri.EscapeDataString(appName)}" +
@@ -134,39 +150,23 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
         if (filters.Count > 0)
             url += $"&$filter={Uri.EscapeDataString(string.Join(" and ", filters))}";
 
-        string? nextUrl = url;
-        while (nextUrl is not null)
-        {
-            ct.ThrowIfCancellationRequested();
-            var page = await GetArmJsonAsync<RunsListResponse>(nextUrl, ct);
-            foreach (var run in page.Value)
-                yield return run;
-            nextUrl = page.NextLink;
-        }
+        return GetPaginatedAsync<RunsListResponse, WorkflowRun>(url, ct);
     }
 
-    public async IAsyncEnumerable<WorkflowAction> ListActionsAsync(
+    public IAsyncEnumerable<WorkflowAction> ListActionsAsync(
         string subscriptionId,
         string resourceGroup,
         string appName,
         string workflowName,
         string runName,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        CancellationToken ct = default)
     {
         var url = $"{ArmBase}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resourceGroups/{Uri.EscapeDataString(resourceGroup)}" +
                   $"/providers/Microsoft.Web/sites/{Uri.EscapeDataString(appName)}" +
                   $"/hostruntime/runtime/webhooks/workflow/api/management" +
                   $"/workflows/{Uri.EscapeDataString(workflowName)}/runs/{Uri.EscapeDataString(runName)}/actions?api-version=2018-11-01";
 
-        string? nextUrl = url;
-        while (nextUrl is not null)
-        {
-            ct.ThrowIfCancellationRequested();
-            var page = await GetArmJsonAsync<ActionListResponse>(nextUrl, ct);
-            foreach (var action in page.Value)
-                yield return action;
-            nextUrl = page.NextLink;
-        }
+        return GetPaginatedAsync<ActionListResponse, WorkflowAction>(url, ct);
     }
 
     public async Task<string?> FetchContentAsync(ContentLink link, CancellationToken ct)
