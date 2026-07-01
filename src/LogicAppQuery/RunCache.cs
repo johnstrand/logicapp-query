@@ -71,7 +71,7 @@ internal sealed class RunCache
         _dirty = false;
     }
 
-    static string Sanitize(string name)
+    internal static string Sanitize(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();
         return string.Concat(name.Select(c => invalid.Contains(c) ? '_' : c));
