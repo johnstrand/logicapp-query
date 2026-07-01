@@ -160,12 +160,18 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
             return await TryFetchAsync(link.Uri, null, ct);
         }
 
-        var bearer = await GetBearerTokenAsync(ct);
+        if (Uri.TryCreate(link.Uri, UriKind.Absolute, out var parsedUri) &&
+            parsedUri.Host.Equals("management.azure.com", StringComparison.OrdinalIgnoreCase))
+        {
+            var bearer = await GetBearerTokenAsync(ct);
 
-        // Try with bearer token first (ARM management content URLs).
-        // If that fails, try without auth as a fallback.
-        return await TryFetchAsync(link.Uri, bearer, ct)
-            ?? await TryFetchAsync(link.Uri, null, ct);
+            // Try with bearer token first (ARM management content URLs).
+            // If that fails, try without auth as a fallback.
+            return await TryFetchAsync(link.Uri, bearer, ct)
+                ?? await TryFetchAsync(link.Uri, null, ct);
+        }
+
+        return await TryFetchAsync(link.Uri, null, ct);
     }
 
     async Task<string?> TryFetchAsync(string uri, string? bearer, CancellationToken ct)
