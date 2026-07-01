@@ -50,7 +50,8 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
 
     public async Task<string> DiscoverResourceGroupAsync(string subscriptionId, string appName, CancellationToken ct)
     {
-        var filter = Uri.EscapeDataString($"name eq '{appName}' and resourceType eq 'Microsoft.Web/sites'");
+        var escapedAppName = appName.Replace("'", "''");
+        var filter = Uri.EscapeDataString($"name eq '{escapedAppName}' and resourceType eq 'Microsoft.Web/sites'");
 
         // Paginate the resources list — ARM can return empty first pages transiently.
         // Retry up to 3 times to handle eventual-consistency blips.
