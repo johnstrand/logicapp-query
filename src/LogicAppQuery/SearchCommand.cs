@@ -132,34 +132,40 @@ internal sealed class SearchCommand(IArmClient armClient)
         string workflowName,
         CancellationToken ct)
     {
-        var parts = new List<string>();
+        var tasks = new List<Task<string?>>();
 
         // Trigger outputs (the actual inbound payload)
-        await AppendContentAsync(parts,
+        tasks.Add(FetchContentPartAsync(
             run.Properties.Trigger?.OutputsLink,
             run.Properties.Trigger?.Outputs,
-            ct);
+            ct));
 
         // All action inputs and outputs
         await foreach (var action in armClient.ListActionsAsync(
             subscriptionId, resourceGroup, appName, workflowName, run.Name, ct))
         {
-            await AppendContentAsync(parts,
+            tasks.Add(FetchContentPartAsync(
                 action.Properties.InputsLink,
                 action.Properties.Inputs,
-                ct);
+                ct));
 
-            await AppendContentAsync(parts,
+            tasks.Add(FetchContentPartAsync(
                 action.Properties.OutputsLink,
                 action.Properties.Outputs,
-                ct);
+                ct));
+        }
+
+        var results = await Task.WhenAll(tasks);
+        var parts = new List<string>();
+        foreach (var res in results)
+        {
+            if (res is not null) parts.Add(res);
         }
 
         return parts.Count > 0 ? string.Join("\n", parts) : null;
     }
 
-    async Task AppendContentAsync(
-        List<string> parts,
+    async Task<string?> FetchContentPartAsync(
         ContentLink? link,
         JsonElement? inlined,
         CancellationToken ct)
@@ -169,7 +175,7 @@ internal sealed class SearchCommand(IArmClient armClient)
             try
             {
                 var fetched = await armClient.FetchContentAsync(link, ct);
-                if (fetched is not null) { parts.Add(fetched); return; }
+                if (fetched is not null) { return fetched; }
             }
             catch (Exception ex)
             {
@@ -178,7 +184,9 @@ internal sealed class SearchCommand(IArmClient armClient)
         }
 
         if (inlined is { ValueKind: not JsonValueKind.Undefined } el)
-            parts.Add(el.GetRawText());
+            return el.GetRawText();
+
+        return null;
     }
 
     internal static string BuildSnippet(string content, string searchTerm)
