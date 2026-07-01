@@ -59,7 +59,7 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
             if (attempt > 0)
                 await Task.Delay(TimeSpan.FromSeconds(attempt * 2), ct);
 
-            string? nextUrl = $"{ArmBase}/subscriptions/{subscriptionId}/resources?$filter={filter}&api-version=2021-04-01";
+            string? nextUrl = $"{ArmBase}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resources?$filter={filter}&api-version=2021-04-01";
             while (nextUrl is not null)
             {
                 var page = await GetArmJsonAsync<ResourceListResponse>(nextUrl, ct);
@@ -102,10 +102,10 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
         DateTimeOffset? end,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var url = $"{ArmBase}/subscriptions/{subscriptionId}/resourceGroups/{resourceGroup}" +
-                  $"/providers/Microsoft.Web/sites/{appName}" +
+        var url = $"{ArmBase}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resourceGroups/{Uri.EscapeDataString(resourceGroup)}" +
+                  $"/providers/Microsoft.Web/sites/{Uri.EscapeDataString(appName)}" +
                   $"/hostruntime/runtime/webhooks/workflow/api/management" +
-                  $"/workflows/{workflowName}/runs?api-version=2018-11-01";
+                  $"/workflows/{Uri.EscapeDataString(workflowName)}/runs?api-version=2018-11-01";
 
         var filters = new List<string>();
         if (start.HasValue) filters.Add($"StartTime ge {start.Value.UtcDateTime:O}");
@@ -132,10 +132,10 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
         string runName,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var url = $"{ArmBase}/subscriptions/{subscriptionId}/resourceGroups/{resourceGroup}" +
-                  $"/providers/Microsoft.Web/sites/{appName}" +
+        var url = $"{ArmBase}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resourceGroups/{Uri.EscapeDataString(resourceGroup)}" +
+                  $"/providers/Microsoft.Web/sites/{Uri.EscapeDataString(appName)}" +
                   $"/hostruntime/runtime/webhooks/workflow/api/management" +
-                  $"/workflows/{workflowName}/runs/{runName}/actions?api-version=2018-11-01";
+                  $"/workflows/{Uri.EscapeDataString(workflowName)}/runs/{Uri.EscapeDataString(runName)}/actions?api-version=2018-11-01";
 
         string? nextUrl = url;
         while (nextUrl is not null)
