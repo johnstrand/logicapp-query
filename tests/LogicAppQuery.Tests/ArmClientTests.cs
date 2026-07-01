@@ -44,6 +44,28 @@ public class ArmClientTests
     }
 
     [Fact]
+    public void ExtractResourceGroup_NullString_ThrowsArgumentNullException()
+    {
+        // Arrange
+        string resourceId = null!;
+
+        // Act & Assert
+        var exception = Assert.Throws<ArgumentNullException>(() => ArmClient.ExtractResourceGroup(resourceId));
+        Assert.Equal("resourceId", exception.ParamName);
+    }
+
+    [Fact]
+    public void ExtractResourceGroup_WhitespaceString_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var resourceId = "   ";
+
+        // Act & Assert
+        var exception = Assert.Throws<InvalidOperationException>(() => ArmClient.ExtractResourceGroup(resourceId));
+        Assert.Contains("Could not extract resource group from resource ID", exception.Message);
+    }
+
+    [Fact]
     public void ExtractResourceGroup_EmptyString_ThrowsInvalidOperationException()
     {
         // Arrange
