@@ -112,4 +112,81 @@ public class ArmClientTests
         // Assert
         Assert.Equal("my-resource-group", result);
     }
+    [Fact]
+    public async Task FetchContentAsync_ManagementAzureCom_SendsBearerToken()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("https://management.azure.com/some/path", 100);
+
+        // Act
+        await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Single(handler.Requests);
+        var req = handler.Requests[0];
+        Assert.NotNull(req.Headers.Authorization);
+        Assert.Equal("Bearer", req.Headers.Authorization.Scheme);
+        Assert.Equal("fake-token", req.Headers.Authorization.Parameter);
+    }
+
+    [Fact]
+    public async Task FetchContentAsync_ArbitraryDomain_DoesNotSendBearerToken()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("https://attacker.com/some/path", 100);
+
+        // Act
+        await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Single(handler.Requests);
+        var req = handler.Requests[0];
+        Assert.Null(req.Headers.Authorization);
+    }
+
+    [Fact]
+    public async Task FetchContentAsync_SigInQuery_DoesNotSendBearerToken()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        // Even if it's on management.azure.com, if it has a sig=, it skips the bearer
+        var link = new ContentLink("https://management.azure.com/some/path?sig=123", 100);
+
+        // Act
+        await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Single(handler.Requests);
+        var req = handler.Requests[0];
+        Assert.Null(req.Headers.Authorization);
+    }
+
+    private class FakeTokenCredential : Azure.Core.TokenCredential
+    {
+        public override Azure.Core.AccessToken GetToken(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
+        {
+            return new Azure.Core.AccessToken("fake-token", DateTimeOffset.UtcNow.AddHours(1));
+        }
+
+        public override ValueTask<Azure.Core.AccessToken> GetTokenAsync(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
+        {
+            return new ValueTask<Azure.Core.AccessToken>(new Azure.Core.AccessToken("fake-token", DateTimeOffset.UtcNow.AddHours(1)));
+        }
+    }
+
+    private class MockHttpMessageHandler : System.Net.Http.HttpMessageHandler
+    {
+        public List<HttpRequestMessage> Requests { get; } = new();
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent("fake-content") });
+        }
+    }
 }
