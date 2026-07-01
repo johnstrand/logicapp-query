@@ -153,10 +153,17 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
         if (string.IsNullOrEmpty(link.Uri)) return null;
         if (link.ContentSize > MaxInputSizeBytes) return null;
 
+        // Blob/file storage SAS URLs don't accept a Bearer header. We can skip the bearer token
+        // retrieval and the first failed request attempt if we detect a signature in the URI.
+        if (link.Uri.Contains("sig="))
+        {
+            return await TryFetchAsync(link.Uri, null, ct);
+        }
+
         var bearer = await GetBearerTokenAsync(ct);
 
         // Try with bearer token first (ARM management content URLs).
-        // If that fails, try without auth — blob/file storage SAS URLs don't accept a Bearer header.
+        // If that fails, try without auth as a fallback.
         return await TryFetchAsync(link.Uri, bearer, ct)
             ?? await TryFetchAsync(link.Uri, null, ct);
     }
