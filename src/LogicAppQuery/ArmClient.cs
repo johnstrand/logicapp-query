@@ -81,7 +81,7 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http)
             $"Verify the app name and that your account has access.");
     }
 
-    static string ExtractResourceGroup(string resourceId)
+    internal static string ExtractResourceGroup(string resourceId)
     {
         var parts = resourceId.Split('/', StringSplitOptions.RemoveEmptyEntries);
         for (int i = 0; i < parts.Length - 1; i++)

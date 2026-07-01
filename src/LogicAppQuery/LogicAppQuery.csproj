@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="LogicAppQuery.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Spectre.Console" Version="0.55.0" />
     <PackageReference Include="System.CommandLine" Version="3.0.0-preview.3.26207.106" />
