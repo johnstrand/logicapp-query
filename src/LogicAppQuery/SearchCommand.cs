@@ -171,7 +171,10 @@ internal sealed class SearchCommand(IArmClient armClient)
                 var fetched = await armClient.FetchContentAsync(link, ct);
                 if (fetched is not null) { parts.Add(fetched); return; }
             }
-            catch { /* fall through to inlined */ }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"[yellow]Warning:[/] Failed to fetch content link ({Markup.Escape(ex.Message)}). Falling back to inlined content.");
+            }
         }
 
         if (inlined is { ValueKind: not JsonValueKind.Undefined } el)
