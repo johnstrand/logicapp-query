@@ -5,7 +5,7 @@ using System.Text.Json;
 
 namespace LogicAppQuery;
 
-internal sealed class ArmClient(TokenCredential credential, HttpClient http)
+internal sealed class ArmClient(TokenCredential credential, HttpClient http) : IArmClient
 {
     const string ArmScope = "https://management.azure.com/.default";
     const string ArmBase = "https://management.azure.com";

@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace LogicAppQuery;
 
-internal sealed class SearchCommand(ArmClient armClient)
+internal sealed class SearchCommand(IArmClient armClient)
 {
     const int SnippetRadius = 100;
     const int MaxSnippetLength = 300;
