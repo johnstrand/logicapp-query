@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Spectre.Console;
 
 namespace LogicAppQuery;
 
@@ -48,7 +49,10 @@ internal sealed class RunCache
                 if (dict is not null)
                     return new RunCache(filePath, dict);
             }
-            catch { /* corrupt cache — start fresh */ }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"[yellow]Warning:[/] Could not load run cache. Starting fresh. ({Markup.Escape(ex.Message)})");
+            }
         }
 
         return new RunCache(filePath, []);
