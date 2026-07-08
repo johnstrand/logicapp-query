@@ -130,4 +130,25 @@ public class SearchCommandTests
         var result = SearchCommand.BuildSnippet("This is some CONTENT here", "content");
         Assert.Equal("This is some CONTENT here", result);
     }
+
+    [Fact]
+    public void BuildSnippet_EmptySearchTerm_ReturnsEntireContent()
+    {
+        var result = SearchCommand.BuildSnippet("content", "");
+        Assert.Equal("content", result);
+    }
+
+    [Fact]
+    public void BuildSnippet_EmptyContent_ReturnsEmptyString()
+    {
+        var result = SearchCommand.BuildSnippet("", "searchTerm");
+        Assert.Equal(string.Empty, result);
+    }
+
+    [Fact]
+    public void BuildSnippet_EmptyContentAndEmptySearchTerm_ReturnsEmptyString()
+    {
+        var result = SearchCommand.BuildSnippet("", "");
+        Assert.Equal(string.Empty, result);
+    }
 }
