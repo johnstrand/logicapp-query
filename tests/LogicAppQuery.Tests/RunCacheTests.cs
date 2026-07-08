@@ -53,4 +53,40 @@ public class RunCacheTests
             Assert.Equal("_____", result);
         }
     }
+
+    [Fact]
+    public void Set_NewRun_UpdatesCacheAndDirtyFlag()
+    {
+        var cache = new RunCache("dummy.json", new System.Collections.Generic.Dictionary<string, CachedRun>());
+        var runName = "run1";
+        var run = new CachedRun("Succeeded", DateTimeOffset.UtcNow, "content1");
+
+        Assert.False(cache.IsDirty);
+
+        cache.Set(runName, run);
+
+        Assert.True(cache.IsDirty);
+        Assert.True(cache.TryGet(runName, out var retrievedRun));
+        Assert.Equal(run, retrievedRun);
+    }
+
+    [Fact]
+    public void Set_ExistingRun_UpdatesCacheAndDirtyFlag()
+    {
+        var runName = "run1";
+        var initialRun = new CachedRun("Failed", DateTimeOffset.UtcNow.AddMinutes(-5), "initial_content");
+        var runs = new System.Collections.Generic.Dictionary<string, CachedRun> { { runName, initialRun } };
+        var cache = new RunCache("dummy.json", runs);
+
+        var updatedRun = new CachedRun("Succeeded", DateTimeOffset.UtcNow, "updated_content");
+
+        Assert.False(cache.IsDirty);
+
+        cache.Set(runName, updatedRun);
+
+        Assert.True(cache.IsDirty);
+        Assert.True(cache.TryGet(runName, out var retrievedRun));
+        Assert.Equal(updatedRun, retrievedRun);
+        Assert.NotEqual(initialRun, retrievedRun);
+    }
 }
