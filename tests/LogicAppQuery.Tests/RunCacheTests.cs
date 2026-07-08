@@ -55,6 +55,39 @@ public class RunCacheTests
     }
 
     [Fact]
+    public void TryGet_ExistingKey_ReturnsTrueAndRun()
+    {
+        var cache = RunCache.Load("testApp", "testWorkflow_ExistingKey");
+        var run = new CachedRun("Succeeded", DateTimeOffset.UtcNow, "{}");
+        cache.Set("testRun", run);
+
+        var result = cache.TryGet("testRun", out var retrievedRun);
+
+        Assert.True(result);
+        Assert.NotNull(retrievedRun);
+        Assert.Equal(run.Status, retrievedRun.Status);
+        Assert.Equal(run.Content, retrievedRun.Content);
+        Assert.Equal(run.StartTime, retrievedRun.StartTime);
+    }
+
+    [Fact]
+    public void TryGet_NonExistingKey_ReturnsFalseAndNull()
+    {
+        var cache = RunCache.Load("testApp", "testWorkflow_NonExistingKey");
+        var result = cache.TryGet("nonExistingRun", out var retrievedRun);
+
+        Assert.False(result);
+        Assert.Null(retrievedRun);
+    }
+
+    [Fact]
+    public void TryGet_NullKey_ThrowsArgumentNullException()
+    {
+        var cache = RunCache.Load("testApp", "testWorkflow_NullKey");
+        Assert.Throws<ArgumentNullException>(() => cache.TryGet(null!, out _));
+    }
+
+    [Fact]
     public void Load_WithCorruptedCacheFile_ReturnsEmptyCache()
     {
         var appName = "testAppErrorPath";
@@ -120,6 +153,7 @@ public class RunCacheTests
         Assert.Equal(updatedRun, retrievedRun);
         Assert.NotEqual(initialRun, retrievedRun);
     }
+
     [Theory]
     [InlineData("Succeeded")]
     [InlineData("Failed")]
