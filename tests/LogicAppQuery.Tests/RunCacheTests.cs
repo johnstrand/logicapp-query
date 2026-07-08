@@ -53,4 +53,29 @@ public class RunCacheTests
             Assert.Equal("_____", result);
         }
     }
+
+    [Theory]
+    [InlineData("Succeeded")]
+    [InlineData("Failed")]
+    [InlineData("Cancelled")]
+    [InlineData("Skipped")]
+    [InlineData("TimedOut")]
+    [InlineData("Aborted")]
+    public void IsTerminal_TerminalStates_ReturnsTrue(string status)
+    {
+        Assert.True(RunCache.IsTerminal(status));
+    }
+
+    [Theory]
+    [InlineData("Running")]
+    [InlineData("Waiting")]
+    [InlineData("Suspended")]
+    [InlineData("Unknown")]
+    [InlineData("succeeded")] // Case sensitivity check
+    [InlineData("")]
+    [InlineData(null)]
+    public void IsTerminal_NonTerminalStatesAndEdgeCases_ReturnsFalse(string? status)
+    {
+        Assert.False(RunCache.IsTerminal(status!));
+    }
 }
