@@ -22,7 +22,9 @@ internal sealed class RunCache
     readonly Dictionary<string, CachedRun> _runs;
     bool _dirty;
 
-    RunCache(string filePath, Dictionary<string, CachedRun> runs)
+    internal bool IsDirty => _dirty;
+
+    internal RunCache(string filePath, Dictionary<string, CachedRun> runs)
     {
         _filePath = filePath;
         _runs = runs;
