@@ -53,4 +53,35 @@ public class RunCacheTests
             Assert.Equal("_____", result);
         }
     }
+
+    [Fact]
+    public void Load_WithCorruptedCacheFile_ReturnsEmptyCache()
+    {
+        var appName = "testAppErrorPath";
+        var workflowName = "testWorkflowErrorPath";
+
+        var dir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "LogicAppQuery");
+        Directory.CreateDirectory(dir);
+
+        var fileName = $"{RunCache.Sanitize(appName)}-{RunCache.Sanitize(workflowName)}.cache.json";
+        var filePath = Path.Combine(dir, fileName);
+
+        File.WriteAllText(filePath, "{ invalid json }");
+
+        try
+        {
+            var cache = RunCache.Load(appName, workflowName);
+            Assert.NotNull(cache);
+            Assert.False(cache.TryGet("any", out _));
+        }
+        finally
+        {
+            if (File.Exists(filePath))
+            {
+                File.Delete(filePath);
+            }
+        }
+    }
 }
