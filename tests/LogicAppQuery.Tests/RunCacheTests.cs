@@ -53,4 +53,129 @@ public class RunCacheTests
             Assert.Equal("_____", result);
         }
     }
+
+    [Fact]
+    public void TryGet_ExistingKey_ReturnsTrueAndRun()
+    {
+        var cache = RunCache.Load("testApp", "testWorkflow_ExistingKey");
+        var run = new CachedRun("Succeeded", DateTimeOffset.UtcNow, "{}");
+        cache.Set("testRun", run);
+
+        var result = cache.TryGet("testRun", out var retrievedRun);
+
+        Assert.True(result);
+        Assert.NotNull(retrievedRun);
+        Assert.Equal(run.Status, retrievedRun.Status);
+        Assert.Equal(run.Content, retrievedRun.Content);
+        Assert.Equal(run.StartTime, retrievedRun.StartTime);
+    }
+
+    [Fact]
+    public void TryGet_NonExistingKey_ReturnsFalseAndNull()
+    {
+        var cache = RunCache.Load("testApp", "testWorkflow_NonExistingKey");
+        var result = cache.TryGet("nonExistingRun", out var retrievedRun);
+
+        Assert.False(result);
+        Assert.Null(retrievedRun);
+    }
+
+    [Fact]
+    public void TryGet_NullKey_ThrowsArgumentNullException()
+    {
+        var cache = RunCache.Load("testApp", "testWorkflow_NullKey");
+        Assert.Throws<ArgumentNullException>(() => cache.TryGet(null!, out _));
+    }
+
+    [Fact]
+    public void Load_WithCorruptedCacheFile_ReturnsEmptyCache()
+    {
+        var appName = "testAppErrorPath";
+        var workflowName = "testWorkflowErrorPath";
+
+        var dir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "LogicAppQuery");
+        Directory.CreateDirectory(dir);
+
+        var fileName = $"{RunCache.Sanitize(appName)}-{RunCache.Sanitize(workflowName)}.cache.json";
+        var filePath = Path.Combine(dir, fileName);
+
+        File.WriteAllText(filePath, "{ invalid json }");
+
+        try
+        {
+            var cache = RunCache.Load(appName, workflowName);
+            Assert.NotNull(cache);
+            Assert.False(cache.TryGet("any", out _));
+        }
+        finally
+        {
+            if (File.Exists(filePath))
+            {
+                File.Delete(filePath);
+            }
+        }
+    }
+
+    [Fact]
+    public void Set_NewRun_UpdatesCacheAndDirtyFlag()
+    {
+        var cache = new RunCache("dummy.json", new System.Collections.Generic.Dictionary<string, CachedRun>());
+        var runName = "run1";
+        var run = new CachedRun("Succeeded", DateTimeOffset.UtcNow, "content1");
+
+        Assert.False(cache.IsDirty);
+
+        cache.Set(runName, run);
+
+        Assert.True(cache.IsDirty);
+        Assert.True(cache.TryGet(runName, out var retrievedRun));
+        Assert.Equal(run, retrievedRun);
+    }
+
+    [Fact]
+    public void Set_ExistingRun_UpdatesCacheAndDirtyFlag()
+    {
+        var runName = "run1";
+        var initialRun = new CachedRun("Failed", DateTimeOffset.UtcNow.AddMinutes(-5), "initial_content");
+        var runs = new System.Collections.Generic.Dictionary<string, CachedRun> { { runName, initialRun } };
+        var cache = new RunCache("dummy.json", runs);
+
+        var updatedRun = new CachedRun("Succeeded", DateTimeOffset.UtcNow, "updated_content");
+
+        Assert.False(cache.IsDirty);
+
+        cache.Set(runName, updatedRun);
+
+        Assert.True(cache.IsDirty);
+        Assert.True(cache.TryGet(runName, out var retrievedRun));
+        Assert.Equal(updatedRun, retrievedRun);
+        Assert.NotEqual(initialRun, retrievedRun);
+    }
+
+    [Theory]
+    [InlineData("Succeeded")]
+    [InlineData("Failed")]
+    [InlineData("Cancelled")]
+    [InlineData("Skipped")]
+    [InlineData("TimedOut")]
+    [InlineData("Aborted")]
+    public void IsTerminal_TerminalStates_ReturnsTrue(string status)
+    {
+        Assert.True(RunCache.IsTerminal(status));
+    }
+
+    [Theory]
+    [InlineData("Running")]
+    [InlineData("Waiting")]
+    [InlineData("Suspended")]
+    [InlineData("Unknown")]
+    [InlineData("succeeded")] // Case sensitivity check
+    [InlineData("")]
+    [InlineData(null)]
+    public void IsTerminal_NonTerminalStatesAndEdgeCases_ReturnsFalse(string? status)
+    {
+        Assert.False(RunCache.IsTerminal(status!));
+    }
 }
