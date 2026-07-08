@@ -38,7 +38,6 @@ internal record WorkflowRunProperties(
 );
 
 internal record WorkflowRunTrigger(
-    [property: JsonPropertyName("name")] string? Name,
     [property: JsonPropertyName("outputsLink")] ContentLink? OutputsLink,
     [property: JsonPropertyName("outputs")] JsonElement? Outputs  // small payloads are inlined here
 );
