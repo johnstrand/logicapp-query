@@ -25,7 +25,6 @@ internal record RunsListResponse(
 ) : IPageableResponse<WorkflowRun>;
 
 internal record WorkflowRun(
-    [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("properties")] WorkflowRunProperties Properties
 );
