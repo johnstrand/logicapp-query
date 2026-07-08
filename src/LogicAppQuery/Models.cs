@@ -32,7 +32,6 @@ internal record WorkflowRun(
 internal record WorkflowRunProperties(
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("startTime")] DateTimeOffset StartTime,
-    [property: JsonPropertyName("endTime")] DateTimeOffset? EndTime,
     [property: JsonPropertyName("trigger")] WorkflowRunTrigger? Trigger
 );
 
