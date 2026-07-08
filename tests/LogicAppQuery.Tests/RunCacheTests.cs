@@ -120,7 +120,6 @@ public class RunCacheTests
         Assert.Equal(updatedRun, retrievedRun);
         Assert.NotEqual(initialRun, retrievedRun);
     }
-
     [Theory]
     [InlineData("Succeeded")]
     [InlineData("Failed")]
