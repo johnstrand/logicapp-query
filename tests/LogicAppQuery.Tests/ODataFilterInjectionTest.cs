@@ -37,7 +37,23 @@ namespace LogicAppQuery.Tests
         }
 
         [Fact]
-        public async Task DiscoverResourceGroupAsync_EscapesSingleQuotesInAppName()
+        public async Task DiscoverResourceGroupAsync_ThrowsArgumentExceptionForInvalidAppName()
+        {
+            var handler = new MockHandler();
+            var client = new HttpClient(handler);
+            var armClient = new ArmClient(new MockCredential(), client);
+
+            await Assert.ThrowsAsync<ArgumentException>("appName", async () =>
+            {
+                await armClient.DiscoverResourceGroupAsync("sub-id", "my'app", CancellationToken.None);
+            });
+
+            // Ensure no request was actually sent
+            Assert.Null(handler.LastRequestUri);
+        }
+
+        [Fact]
+        public async Task DiscoverResourceGroupAsync_FormatsFilterCorrectlyForValidAppName()
         {
             var handler = new MockHandler();
             var client = new HttpClient(handler);
@@ -45,7 +61,7 @@ namespace LogicAppQuery.Tests
 
             try
             {
-                await armClient.DiscoverResourceGroupAsync("sub-id", "my'app", CancellationToken.None);
+                await armClient.DiscoverResourceGroupAsync("sub-id", "my-valid-app123", CancellationToken.None);
             }
             catch (InvalidOperationException)
             {
@@ -56,7 +72,7 @@ namespace LogicAppQuery.Tests
 
             // Uri.ToString() unescapes some characters in some .NET versions.
             // Better to check AbsoluteUri which keeps things escaped or compare manually.
-            var expectedSubstring = "name%20eq%20%27my%27%27app%27%20and%20resourceType%20eq%20%27Microsoft.Web%2Fsites%27";
+            var expectedSubstring = "name%20eq%20%27my-valid-app123%27%20and%20resourceType%20eq%20%27Microsoft.Web%2Fsites%27";
             Assert.Contains(expectedSubstring, handler.LastRequestUri);
         }
     }
