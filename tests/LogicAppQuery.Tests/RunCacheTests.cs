@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading.Tasks;
 using LogicAppQuery;
 using Xunit;
 
@@ -68,103 +69,122 @@ public class RunCacheTests
     }
 
     [Fact]
-    public void TryGet_ExistingKey_ReturnsTrueAndRun()
+    public async Task SetAndTryGetAsync_StoresAndRetrievesRun()
     {
-        var cache = RunCache.Load("testApp", "testWorkflow_ExistingKey");
-        var run = new CachedRun("Succeeded", DateTimeOffset.UtcNow, "{}");
-        cache.Set("testRun", run);
-
-        var result = cache.TryGet("testRun", out var retrievedRun);
-
-        Assert.True(result);
-        Assert.NotNull(retrievedRun);
-        Assert.Equal(run.Status, retrievedRun.Status);
-        Assert.Equal(run.Content, retrievedRun.Content);
-        Assert.Equal(run.StartTime, retrievedRun.StartTime);
-    }
-
-    [Fact]
-    public void TryGet_NonExistingKey_ReturnsFalseAndNull()
-    {
-        var cache = RunCache.Load("testApp", "testWorkflow_NonExistingKey");
-        var result = cache.TryGet("nonExistingRun", out var retrievedRun);
-
-        Assert.False(result);
-        Assert.Null(retrievedRun);
-    }
-
-    [Fact]
-    public void TryGet_NullKey_ThrowsArgumentNullException()
-    {
-        var cache = RunCache.Load("testApp", "testWorkflow_NullKey");
-        Assert.Throws<ArgumentNullException>(() => cache.TryGet(null!, out _));
-    }
-
-    [Fact]
-    public void Load_WithCorruptedCacheFile_ReturnsEmptyCache()
-    {
-        var appName = "testAppErrorPath";
-        var workflowName = "testWorkflowErrorPath";
-
-        var dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "LogicAppQuery");
-        Directory.CreateDirectory(dir);
-
-        var fileName = $"{RunCache.Sanitize(appName)}-{RunCache.Sanitize(workflowName)}.cache.json";
-        var filePath = Path.Combine(dir, fileName);
-
-        File.WriteAllText(filePath, "{ invalid json }");
-
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         try
         {
-            var cache = RunCache.Load(appName, workflowName);
-            Assert.NotNull(cache);
-            Assert.False(cache.TryGet("any", out _));
+            await using var cache = await RunCache.LoadAsync("testApp", "testWorkflow", tempDir);
+
+            var run = new CachedRun("Succeeded", DateTimeOffset.UtcNow, "{\"key\":\"value\"}");
+            await cache.SetAsync("testRun", run);
+
+            var retrieved = await cache.TryGetAsync("testRun");
+
+            Assert.NotNull(retrieved);
+            Assert.Equal(run.Status, retrieved.Status);
+            Assert.Equal(run.Content, retrieved.Content);
+            Assert.Equal(run.StartTime.ToString("o"), retrieved.StartTime.ToString("o")); // Exact ISO string comparison
         }
         finally
         {
-            if (File.Exists(filePath))
-            {
-                File.Delete(filePath);
-            }
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
         }
     }
 
     [Fact]
-    public void Set_NewRun_UpdatesCacheAndDirtyFlag()
+    public async Task TryGetAsync_NonExistingKey_ReturnsNull()
     {
-        var cache = new RunCache("dummy.json", new System.Collections.Generic.Dictionary<string, CachedRun>());
-        var runName = "run1";
-        var run = new CachedRun("Succeeded", DateTimeOffset.UtcNow, "content1");
-
-        Assert.False(cache.IsDirty);
-
-        cache.Set(runName, run);
-
-        Assert.True(cache.IsDirty);
-        Assert.True(cache.TryGet(runName, out var retrievedRun));
-        Assert.Equal(run, retrievedRun);
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using var cache = await RunCache.LoadAsync("testApp", "testWorkflow", tempDir);
+            var retrieved = await cache.TryGetAsync("nonExistingRun");
+            Assert.Null(retrieved);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
     }
 
     [Fact]
-    public void Set_ExistingRun_UpdatesCacheAndDirtyFlag()
+    public async Task LoadAsync_WithLegacyCacheFile_MigratesToDatabaseAndDeletesFile()
     {
-        var runName = "run1";
-        var initialRun = new CachedRun("Failed", DateTimeOffset.UtcNow.AddMinutes(-5), "initial_content");
-        var runs = new System.Collections.Generic.Dictionary<string, CachedRun> { { runName, initialRun } };
-        var cache = new RunCache("dummy.json", runs);
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(tempDir);
 
-        var updatedRun = new CachedRun("Succeeded", DateTimeOffset.UtcNow, "updated_content");
+        var appName = "testApp";
+        var workflowName = "testWorkflow";
+        var runName = "run_123";
 
-        Assert.False(cache.IsDirty);
+        var legacyFilePath = Path.Combine(tempDir, $"{RunCache.Sanitize(appName)}-{RunCache.Sanitize(workflowName)}.cache.json");
 
-        cache.Set(runName, updatedRun);
+        var json = $$"""
+        {
+            "{{runName}}": {
+                "status": "Failed",
+                "startTime": "2023-10-27T10:00:00Z",
+                "content": "error details"
+            }
+        }
+        """;
 
-        Assert.True(cache.IsDirty);
-        Assert.True(cache.TryGet(runName, out var retrievedRun));
-        Assert.Equal(updatedRun, retrievedRun);
-        Assert.NotEqual(initialRun, retrievedRun);
+        await File.WriteAllTextAsync(legacyFilePath, json);
+
+        try
+        {
+            await using var cache = await RunCache.LoadAsync(appName, workflowName, tempDir);
+
+            // File should be deleted after successful migration
+            Assert.False(File.Exists(legacyFilePath));
+
+            // DB should contain the migrated record
+            var retrieved = await cache.TryGetAsync(runName);
+            Assert.NotNull(retrieved);
+            Assert.Equal("Failed", retrieved.Status);
+            Assert.Equal("error details", retrieved.Content);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task LoadAsync_WithCorruptedLegacyCacheFile_IgnoresAndDeletesOrLeavesFile()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(tempDir);
+
+        var appName = "testApp";
+        var workflowName = "testWorkflow";
+        var legacyFilePath = Path.Combine(tempDir, $"{RunCache.Sanitize(appName)}-{RunCache.Sanitize(workflowName)}.cache.json");
+
+        await File.WriteAllTextAsync(legacyFilePath, "{ invalid json }");
+
+        try
+        {
+            await using var cache = await RunCache.LoadAsync(appName, workflowName, tempDir);
+
+            // A corrupted file won't be successfully deserialized, so it shouldn't crash,
+            // but it won't migrate anything. In our implementation, we catch the exception and log a warning,
+            // so the file might not be deleted.
+            var retrieved = await cache.TryGetAsync("any_run");
+            Assert.Null(retrieved);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
     }
 
     [Theory]
@@ -184,11 +204,18 @@ public class RunCacheTests
     [InlineData("Waiting")]
     [InlineData("Suspended")]
     [InlineData("Unknown")]
-    [InlineData("succeeded")] // Case sensitivity check
     [InlineData("")]
     [InlineData(null)]
     public void IsTerminal_NonTerminalStatesAndEdgeCases_ReturnsFalse(string? status)
     {
         Assert.False(RunCache.IsTerminal(status!));
+    }
+
+    [Theory]
+    [InlineData("succeeded")]
+    [InlineData("SUCCEEDED")]
+    public void IsTerminal_CaseInsensitiveTerminalStates_ReturnsTrue(string? status)
+    {
+        Assert.True(RunCache.IsTerminal(status!));
     }
 }

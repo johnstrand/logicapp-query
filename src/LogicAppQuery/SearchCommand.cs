@@ -39,79 +39,74 @@ internal sealed class SearchCommand(IArmClient armClient)
         AnsiConsole.MarkupLine($"[green]{Markup.Escape(resourceGroup)}[/]");
         AnsiConsole.WriteLine();
 
-        var cache = RunCache.Load(appName, workflowName);
+        await using var cache = await RunCache.LoadAsync(appName, workflowName);
 
         int runCount = 0, matchCount = 0, fetchFailCount = 0, cacheHits = 0;
 
-        try
-        {
-            await AnsiConsole.Status()
-                .Spinner(Spinner.Known.Dots)
-                .StartAsync("Starting...", async ctx =>
+        await AnsiConsole.Status()
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync("Starting...", async ctx =>
+            {
+                await foreach (var run in armClient.ListRunsAsync(
+                    subscriptionId, resourceGroup, appName, workflowName, start, end, ct))
                 {
-                    await foreach (var run in armClient.ListRunsAsync(
-                        subscriptionId, resourceGroup, appName, workflowName, start, end, ct))
+                    runCount++;
+                    ctx.Status(
+                        $"{run.Properties.StartTime.UtcDateTime:yyyy-MM-dd}  |  " +
+                        $"Searched {runCount} run(s), {matchCount} match(es)" +
+                        (cacheHits > 0 ? $" ({cacheHits} from cache)" : "") +
+                        (fetchFailCount > 0 ? $", {fetchFailCount} unreadable" : "") +
+                        "...");
+
+                    var isTerminal = RunCache.IsTerminal(run.Properties.Status);
+                    string? content;
+
+                    var cached = isTerminal ? await cache.TryGetAsync(run.Name) : null;
+
+                    if (cached is not null)
                     {
-                        runCount++;
-                        ctx.Status(
-                            $"{run.Properties.StartTime.UtcDateTime:yyyy-MM-dd}  |  " +
-                            $"Searched {runCount} run(s), {matchCount} match(es)" +
-                            (cacheHits > 0 ? $" ({cacheHits} from cache)" : "") +
-                            (fetchFailCount > 0 ? $", {fetchFailCount} unreadable" : "") +
-                            "...");
-
-                        var isTerminal = RunCache.IsTerminal(run.Properties.Status);
-                        string? content;
-
-                        if (isTerminal && cache.TryGet(run.Name, out var cached))
-                        {
-                            content = cached.Content;
-                            cacheHits++;
-                        }
-                        else
-                        {
-                            content = await BuildRunContentAsync(
-                                run, subscriptionId, resourceGroup, appName, workflowName, ct);
-
-                            if (content is null)
-                            {
-                                fetchFailCount++;
-                                continue;
-                            }
-
-                            if (isTerminal)
-                                cache.Set(run.Name, new CachedRun(
-                                    run.Properties.Status, run.Properties.StartTime, content));
-                        }
-
-                        if (!content.Contains(searchTerm, StringComparison.OrdinalIgnoreCase))
-                            continue;
-
-                        matchCount++;
-                        var snippet = BuildSnippet(content, searchTerm);
-                        var statusColor = run.Properties.Status switch
-                        {
-                            "Succeeded"              => "green",
-                            "Failed"                 => "red",
-                            "Running"                => "blue",
-                            "Cancelled" or "Skipped" => "grey",
-                            _                        => "white"
-                        };
-
-                        AnsiConsole.MarkupLine(
-                            $"[bold green]MATCH[/]  " +
-                            $"[grey]{run.Properties.StartTime.UtcDateTime:yyyy-MM-dd HH:mm:ss}[/]  " +
-                            $"[{statusColor}]{Markup.Escape(run.Properties.Status)}[/]  " +
-                            $"[dim]{Markup.Escape(run.Name)}[/]");
-                        AnsiConsole.MarkupLine($"  [dim italic]{Markup.Escape(snippet)}[/]");
-                        AnsiConsole.WriteLine();
+                        content = cached.Content;
+                        cacheHits++;
                     }
-                });
-        }
-        finally
-        {
-            cache.Save();
-        }
+                    else
+                    {
+                        content = await BuildRunContentAsync(
+                            run, subscriptionId, resourceGroup, appName, workflowName, ct);
+
+                        if (content is null)
+                        {
+                            fetchFailCount++;
+                            continue;
+                        }
+
+                        if (isTerminal)
+                            await cache.SetAsync(run.Name, new CachedRun(
+                                run.Properties.Status, run.Properties.StartTime, content));
+                    }
+
+                    if (!content.Contains(searchTerm, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    matchCount++;
+                    var snippet = BuildSnippet(content, searchTerm);
+                    var statusColor = run.Properties.Status switch
+                    {
+                        "Succeeded"              => "green",
+                        "Failed"                 => "red",
+                        "Running"                => "blue",
+                        "Cancelled" or "Skipped" => "grey",
+                        _                        => "white"
+                    };
+
+                    AnsiConsole.MarkupLine(
+                        $"[bold green]MATCH[/]  " +
+                        $"[grey]{run.Properties.StartTime.UtcDateTime:yyyy-MM-dd HH:mm:ss}[/]  " +
+                        $"[{statusColor}]{Markup.Escape(run.Properties.Status)}[/]  " +
+                        $"[dim]{Markup.Escape(run.Name)}[/]");
+                    AnsiConsole.MarkupLine($"  [dim italic]{Markup.Escape(snippet)}[/]");
+                    AnsiConsole.WriteLine();
+                }
+            });
 
         AnsiConsole.Write(new Rule());
         AnsiConsole.MarkupLine(
