@@ -170,10 +170,22 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
         return GetPaginatedAsync<ActionListResponse, WorkflowAction>(url, ct);
     }
 
+    private static bool IsAllowedHost(string host)
+    {
+        return host.Equals("management.azure.com", StringComparison.OrdinalIgnoreCase) ||
+               host.EndsWith(".blob.core.windows.net", StringComparison.OrdinalIgnoreCase) ||
+               host.EndsWith(".file.core.windows.net", StringComparison.OrdinalIgnoreCase);
+    }
+
     public async Task<string?> FetchContentAsync(ContentLink link, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(link.Uri)) return null;
         if (link.ContentSize > MaxInputSizeBytes) return null;
+
+        if (!Uri.TryCreate(link.Uri, UriKind.Absolute, out var parsedUri) || !IsAllowedHost(parsedUri.Host))
+        {
+            return null;
+        }
 
         // Blob/file storage SAS URLs don't accept a Bearer header. We can skip the bearer token
         // retrieval and the first failed request attempt if we detect a signature in the URI.
@@ -182,8 +194,7 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
             return await TryFetchAsync(link.Uri, null, ct);
         }
 
-        if (Uri.TryCreate(link.Uri, UriKind.Absolute, out var parsedUri) &&
-            parsedUri.Host.Equals("management.azure.com", StringComparison.OrdinalIgnoreCase))
+        if (parsedUri.Host.Equals("management.azure.com", StringComparison.OrdinalIgnoreCase))
         {
             var bearer = await GetBearerTokenAsync(ct);
 
