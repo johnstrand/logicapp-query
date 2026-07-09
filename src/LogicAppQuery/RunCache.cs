@@ -80,6 +80,7 @@ internal sealed class RunCache
     internal static string Sanitize(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();
-        return string.Concat(name.Select(c => invalid.Contains(c) ? '_' : c));
+        var sanitized = string.Concat(name.Select(c => invalid.Contains(c) ? '_' : c));
+        return sanitized.Replace('.', '_').Replace('/', '_').Replace('\\', '_');
     }
 }

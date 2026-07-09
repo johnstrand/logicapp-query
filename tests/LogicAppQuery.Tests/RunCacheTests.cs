@@ -30,6 +30,19 @@ public class RunCacheTests
         Assert.Equal("valid_name", result);
     }
 
+    [Theory]
+    [InlineData("../foo", "___foo")]
+    [InlineData("..\\foo", "___foo")]
+    [InlineData("foo/bar", "foo_bar")]
+    [InlineData("foo\\bar", "foo_bar")]
+    [InlineData(".", "_")]
+    [InlineData("..", "__")]
+    public void Sanitize_PathTraversalAttempts_AreReplaced(string input, string expected)
+    {
+        var result = RunCache.Sanitize(input);
+        Assert.Equal(expected, result);
+    }
+
     [Fact]
     public void Sanitize_MultipleInvalidCharacters_ReplacesAllWithUnderscores()
     {
