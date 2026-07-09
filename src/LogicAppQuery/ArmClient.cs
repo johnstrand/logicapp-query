@@ -2,6 +2,7 @@ using Azure.Core;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace LogicAppQuery;
 
@@ -87,6 +88,11 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
 
     public async Task<string> DiscoverResourceGroupAsync(string subscriptionId, string appName, CancellationToken ct)
     {
+        if (!Regex.IsMatch(appName, @"^[a-zA-Z0-9\-]+$"))
+        {
+            throw new ArgumentException($"Invalid app name format: {appName}. Only alphanumeric characters and hyphens are allowed.", nameof(appName));
+        }
+
         var escapedAppName = appName.Replace("'", "''");
         var filter = Uri.EscapeDataString($"name eq '{escapedAppName}' and resourceType eq 'Microsoft.Web/sites'");
 
