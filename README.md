@@ -51,4 +51,4 @@ To optimize performance and reduce the number of requests made to the Azure ARM 
 
 When a workflow run has reached a **terminal state** (e.g., `Succeeded`, `Failed`, `Cancelled`, `Skipped`, `TimedOut`, `Aborted`), its content is cached locally. On subsequent searches for the same Logic App and Workflow, the tool will retrieve the payload from the cache instead of fetching it from Azure again, significantly speeding up the search process.
 
-Caches are stored in your local application data folder (`%LOCALAPPDATA%\LogicAppQuery` on Windows or `~/.local/share/LogicAppQuery` on Linux/macOS).
+Caches are stored in a centralized SQLite database (`LogicAppQuery.db`) located in your local application data folder (`%LOCALAPPDATA%\LogicAppQuery` on Windows or `~/.local/share/LogicAppQuery` on Linux/macOS). Legacy JSON cache files from previous versions are automatically migrated to this database upon their first access.
