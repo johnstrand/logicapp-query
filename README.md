@@ -1,6 +1,6 @@
 # Logic App Query
 
-A command-line interface (CLI) tool designed to search Azure Logic App Standard workflow runs. It scans through trigger inputs, trigger outputs, action inputs, and action outputs to find a given search term.
+A command-line interface (CLI) tool designed to search Azure Logic App Standard workflow runs. It scans through trigger outputs, action inputs, and action outputs to find a given search term.
 
 ## Prerequisites
 
