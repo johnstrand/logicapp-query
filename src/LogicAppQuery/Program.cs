@@ -76,7 +76,7 @@ root.SetAction(async (ParseResult result, CancellationToken ct) =>
         new AzurePowerShellCredential(),
         new DefaultAzureCredential(defaultOptions));
 
-    using var http = new HttpClient();
+    using var http = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false });
     var armClient  = new ArmClient(credential, http);
     var command    = new SearchCommand(armClient);
 
