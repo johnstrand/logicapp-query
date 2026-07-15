@@ -96,6 +96,8 @@ internal sealed class RunCache : IAsyncDisposable
                         appNameParam.Value = appName;
                         workflowNameParam.Value = workflowName;
 
+                        command.Prepare();
+
                         foreach (var kvp in dict)
                         {
                             runNameParam.Value = kvp.Key;
