@@ -182,6 +182,20 @@ public class ArmClientTests
         Assert.Null(req.Headers.Authorization);
     }
 
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_MaliciousNextLink_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var handler = new MaliciousNextLinkHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.DiscoverResourceGroupAsync("sub-id", "my-app", CancellationToken.None));
+
+        Assert.Contains("Invalid ARM API URL", exception.Message);
+    }
+
     private class FakeTokenCredential : Azure.Core.TokenCredential
     {
         public override Azure.Core.AccessToken GetToken(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
@@ -195,13 +209,64 @@ public class ArmClientTests
         }
     }
 
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_FailedRequest_TruncatesContentInExceptionMessage()
+    {
+        // Arrange
+        var longContent = new string('A', 300);
+        var handler = new MockHttpMessageHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent(longContent)
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None));
+
+        Assert.Contains("Content: " + new string('A', 256) + "...", ex.Message);
+        Assert.DoesNotContain(new string('A', 257), ex.Message);
+    }
+
     private class MockHttpMessageHandler : System.Net.Http.HttpMessageHandler
     {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage>? _responseFactory;
+
+        public MockHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage>? responseFactory = null)
+        {
+            _responseFactory = responseFactory;
+        }
+
         public List<HttpRequestMessage> Requests { get; } = new();
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Requests.Add(request);
+            var response = _responseFactory != null
+                ? _responseFactory(request)
+                : new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent("fake-content") };
+            return Task.FromResult(response);
+        }
+    }
+
+    private class MaliciousNextLinkHttpMessageHandler : System.Net.Http.HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.RequestUri?.ToString().Contains("api-version=") == true)
+            {
+                // Return a valid first page response but with a malicious NextLink
+                var responseContent = """
+                {
+                    "value": [],
+                    "nextLink": "https://attacker.com/malicious/next/page"
+                }
+                """;
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent(responseContent)
+                });
+            }
+
             return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent("fake-content") });
         }
     }
