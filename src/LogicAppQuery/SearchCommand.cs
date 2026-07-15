@@ -119,7 +119,7 @@ internal sealed class SearchCommand(IArmClient armClient)
             AnsiConsole.MarkupLine($"[yellow]Warning:[/] Could not read content for {fetchFailCount} run(s) — they were skipped.");
     }
 
-    async Task<string?> BuildRunContentAsync(
+    internal async Task<string?> BuildRunContentAsync(
         WorkflowRun run,
         string subscriptionId,
         string resourceGroup,
@@ -128,9 +128,23 @@ internal sealed class SearchCommand(IArmClient armClient)
         CancellationToken ct)
     {
         var tasks = new List<Task<string?>>();
+        using var semaphore = new SemaphoreSlim(10, 10);
+
+        async Task<string?> FetchWithSemaphoreAsync(ContentLink? link, JsonElement? inlined, CancellationToken token)
+        {
+            await semaphore.WaitAsync(token);
+            try
+            {
+                return await FetchContentPartAsync(link, inlined, token);
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+        }
 
         // Trigger outputs (the actual inbound payload)
-        tasks.Add(FetchContentPartAsync(
+        tasks.Add(FetchWithSemaphoreAsync(
             run.Properties.Trigger?.OutputsLink,
             run.Properties.Trigger?.Outputs,
             ct));
@@ -139,12 +153,12 @@ internal sealed class SearchCommand(IArmClient armClient)
         await foreach (var action in armClient.ListActionsAsync(
             subscriptionId, resourceGroup, appName, workflowName, run.Name, ct))
         {
-            tasks.Add(FetchContentPartAsync(
+            tasks.Add(FetchWithSemaphoreAsync(
                 action.Properties.InputsLink,
                 action.Properties.Inputs,
                 ct));
 
-            tasks.Add(FetchContentPartAsync(
+            tasks.Add(FetchWithSemaphoreAsync(
                 action.Properties.OutputsLink,
                 action.Properties.Outputs,
                 ct));
