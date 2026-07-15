@@ -29,6 +29,89 @@ public class SearchCommandTests
         }
     }
 
+    private class ConcurrencyTrackingArmClient : IArmClient
+    {
+        private int _currentConcurrency = 0;
+        public int MaxConcurrency { get; private set; } = 0;
+        private readonly object _lock = new();
+        private readonly int _actionCount;
+
+        public ConcurrencyTrackingArmClient(int actionCount)
+        {
+            _actionCount = actionCount;
+        }
+
+        public Task<string> DiscoverResourceGroupAsync(string subscriptionId, string appName, CancellationToken ct)
+            => Task.FromResult("rg");
+
+        public IAsyncEnumerable<WorkflowRun> ListRunsAsync(string subscriptionId, string resourceGroup, string appName, string workflowName, DateTimeOffset? start, DateTimeOffset? end, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public async IAsyncEnumerable<WorkflowAction> ListActionsAsync(string subscriptionId, string resourceGroup, string appName, string workflowName, string runName, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            for (int i = 0; i < _actionCount; i++)
+            {
+                var action = new WorkflowAction($"Action{i}", new WorkflowActionProperties(
+                    Status: "Succeeded",
+                    InputsLink: new ContentLink($"http://example.com/input{i}", 100),
+                    OutputsLink: new ContentLink($"http://example.com/output{i}", 100),
+                    Inputs: null,
+                    Outputs: null
+                ));
+                yield return action;
+                await Task.Yield();
+            }
+        }
+
+        public async Task<string?> FetchContentAsync(ContentLink link, CancellationToken ct)
+        {
+            lock (_lock)
+            {
+                _currentConcurrency++;
+                if (_currentConcurrency > MaxConcurrency)
+                {
+                    MaxConcurrency = _currentConcurrency;
+                }
+            }
+
+            try
+            {
+                await Task.Delay(50, ct); // Simulate network latency to allow concurrency to build up
+                return "mock_content";
+            }
+            finally
+            {
+                lock (_lock)
+                {
+                    _currentConcurrency--;
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task BuildRunContentAsync_LimitsConcurrency()
+    {
+        // Arrange
+        var fakeClient = new ConcurrencyTrackingArmClient(actionCount: 20); // 20 actions = 40 requests + 1 trigger request = 41 requests
+        var command = new SearchCommand(fakeClient);
+
+        var run = new WorkflowRun("run1", new WorkflowRunProperties(
+            Status: "Succeeded",
+            StartTime: DateTimeOffset.UtcNow,
+            Trigger: new WorkflowRunTrigger(new ContentLink("http://example.com/trigger", 100), null)
+        ));
+
+        // Act
+        var result = await command.BuildRunContentAsync(
+            run, "subId", "rg", "appName", "workflowName", CancellationToken.None);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.True(fakeClient.MaxConcurrency <= 10, $"Max concurrency was {fakeClient.MaxConcurrency}, expected <= 10");
+        Assert.True(fakeClient.MaxConcurrency > 1, $"Max concurrency was {fakeClient.MaxConcurrency}, expected > 1 to ensure it actually ran concurrently");
+    }
+
     [Fact]
     public async Task ExecuteAsync_ResourceGroupDiscoveryFails_ReturnsGracefully()
     {
