@@ -60,10 +60,9 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
         if (!resp.IsSuccessStatusCode)
         {
             var content = await resp.Content.ReadAsStringAsync(ct);
-            var safeContent = content.Length > 256 ? content[..256] + "..." : content;
             throw new HttpRequestException(
                 $"ARM API request failed with status code {(int)resp.StatusCode} ({resp.ReasonPhrase}). " +
-                $"URL: {url}\nContent: {safeContent}");
+                $"URL: {url}\nContent: {content}");
         }
 
         await using var stream = await resp.Content.ReadAsStreamAsync(ct);

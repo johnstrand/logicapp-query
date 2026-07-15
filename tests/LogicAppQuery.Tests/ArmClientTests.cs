@@ -195,14 +195,42 @@ public class ArmClientTests
         }
     }
 
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_FailedRequest_TruncatesContentInExceptionMessage()
+    {
+        // Arrange
+        var longContent = new string('A', 300);
+        var handler = new MockHttpMessageHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent(longContent)
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None));
+
+        Assert.Contains("Content: " + new string('A', 256) + "...", ex.Message);
+        Assert.DoesNotContain(new string('A', 257), ex.Message);
+    }
+
     private class MockHttpMessageHandler : System.Net.Http.HttpMessageHandler
     {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage>? _responseFactory;
+
+        public MockHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage>? responseFactory = null)
+        {
+            _responseFactory = responseFactory;
+        }
+
         public List<HttpRequestMessage> Requests { get; } = new();
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Requests.Add(request);
-            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent("fake-content") });
+            var response = _responseFactory != null
+                ? _responseFactory(request)
+                : new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent("fake-content") };
+            return Task.FromResult(response);
         }
     }
 }
