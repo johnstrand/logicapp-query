@@ -41,6 +41,11 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
 
     async Task<T> GetArmJsonAsync<T>(string url, CancellationToken ct)
     {
+        if (!url.StartsWith(ArmBase, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Invalid ARM API URL. URL must start with {ArmBase}");
+        }
+
         var bearer = await GetBearerTokenAsync(ct);
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
