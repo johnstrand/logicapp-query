@@ -270,4 +270,107 @@ public class ArmClientTests
             return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent("fake-content") });
         }
     }
+
+    [Fact]
+    public async Task ListActionsAsync_Paginated_ReturnsAllActions()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(request =>
+        {
+            var uri = request.RequestUri?.ToString();
+            if (uri != null && !uri.Contains("next"))
+            {
+                var responseContent = """
+                {
+                    "value": [
+                        { "name": "Action1", "properties": { "status": "Succeeded" } }
+                    ],
+                    "nextLink": "https://management.azure.com/next"
+                }
+                """;
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent(responseContent)
+                };
+            }
+            else
+            {
+                var responseContent = """
+                {
+                    "value": [
+                        { "name": "Action2", "properties": { "status": "Failed" } }
+                    ],
+                    "nextLink": null
+                }
+                """;
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent(responseContent)
+                };
+            }
+        });
+
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act
+        var actions = new List<WorkflowAction>();
+        await foreach (var action in client.ListActionsAsync("sub1", "rg1", "app1", "wf1", "run1"))
+        {
+            actions.Add(action);
+        }
+
+        // Assert
+        Assert.Equal(2, actions.Count);
+        Assert.Equal("Action1", actions[0].Name);
+        Assert.Equal("Succeeded", actions[0].Properties.Status);
+        Assert.Equal("Action2", actions[1].Name);
+        Assert.Equal("Failed", actions[1].Properties.Status);
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task ListActionsAsync_ParametersWithSpecialChars_EscapesUrlCorrectly()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(request =>
+        {
+            var responseContent = """
+            {
+                "value": [],
+                "nextLink": null
+            }
+            """;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseContent)
+            };
+        });
+
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        var subscriptionId = "sub 1#";
+        var resourceGroup = "rg?2";
+        var appName = "app/3";
+        var workflowName = "wf&4";
+        var runName = "run=5";
+
+        // Act
+        var actions = new List<WorkflowAction>();
+        await foreach (var action in client.ListActionsAsync(subscriptionId, resourceGroup, appName, workflowName, runName))
+        {
+            actions.Add(action);
+        }
+
+        // Assert
+        Assert.Single(handler.Requests);
+        // Uri.ToString() unescapes some characters like spaces, so we use OriginalString
+        var requestUri = handler.Requests[0].RequestUri?.OriginalString;
+        Assert.NotNull(requestUri);
+
+        Assert.Contains(Uri.EscapeDataString(subscriptionId), requestUri);
+        Assert.Contains(Uri.EscapeDataString(resourceGroup), requestUri);
+        Assert.Contains(Uri.EscapeDataString(appName), requestUri);
+        Assert.Contains(Uri.EscapeDataString(workflowName), requestUri);
+        Assert.Contains(Uri.EscapeDataString(runName), requestUri);
+    }
 }
