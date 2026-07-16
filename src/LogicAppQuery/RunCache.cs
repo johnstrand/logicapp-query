@@ -122,9 +122,14 @@ internal sealed class RunCache : IAsyncDisposable
         return cache;
     }
 
+    private readonly System.Threading.SemaphoreSlim _dbLock = new(1, 1);
+
     public async Task<CachedRun?> TryGetAsync(string runName)
     {
-        using var command = _connection.CreateCommand();
+        await _dbLock.WaitAsync();
+        try
+        {
+            using var command = _connection.CreateCommand();
         command.CommandText = @"
             SELECT Status, StartTime, Content
             FROM Runs
@@ -148,11 +153,19 @@ internal sealed class RunCache : IAsyncDisposable
         }
 
         return null;
+        }
+        finally
+        {
+            _dbLock.Release();
+        }
     }
 
     public async Task SetAsync(string runName, CachedRun run)
     {
-        using var command = _connection.CreateCommand();
+        await _dbLock.WaitAsync();
+        try
+        {
+            using var command = _connection.CreateCommand();
         command.CommandText = @"
             INSERT OR REPLACE INTO Runs (AppName, WorkflowName, RunName, Status, StartTime, Content)
             VALUES ($AppName, $WorkflowName, $RunName, $Status, $StartTime, $Content);
@@ -165,6 +178,11 @@ internal sealed class RunCache : IAsyncDisposable
         command.Parameters.AddWithValue("$Content", run.Content);
 
         await command.ExecuteNonQueryAsync();
+        }
+        finally
+        {
+            _dbLock.Release();
+        }
     }
 
     public ValueTask DisposeAsync()

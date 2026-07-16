@@ -7,6 +7,7 @@ internal sealed class SearchCommand(IArmClient armClient)
 {
     const int SnippetRadius = 100;
     const int MaxSnippetLength = 300;
+    private readonly object _consoleLock = new();
 
     public async Task ExecuteAsync(
         string subscriptionId,
@@ -47,10 +48,11 @@ internal sealed class SearchCommand(IArmClient armClient)
             .Spinner(Spinner.Known.Dots)
             .StartAsync("Starting...", async ctx =>
             {
-                await foreach (var run in armClient.ListRunsAsync(
-                    subscriptionId, resourceGroup, appName, workflowName, start, end, ct))
+                var options = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount * 2, CancellationToken = ct };
+                await Parallel.ForEachAsync(armClient.ListRunsAsync(
+                    subscriptionId, resourceGroup, appName, workflowName, start, end, ct), options, async (run, token) =>
                 {
-                    runCount++;
+                    Interlocked.Increment(ref runCount);
                     ctx.Status(
                         $"{run.Properties.StartTime.UtcDateTime:yyyy-MM-dd}  |  " +
                         $"Searched {runCount} run(s), {matchCount} match(es)" +
@@ -66,17 +68,17 @@ internal sealed class SearchCommand(IArmClient armClient)
                     if (cached is not null)
                     {
                         content = cached.Content;
-                        cacheHits++;
+                        Interlocked.Increment(ref cacheHits);
                     }
                     else
                     {
                         content = await BuildRunContentAsync(
-                            run, subscriptionId, resourceGroup, appName, workflowName, ct);
+                            run, subscriptionId, resourceGroup, appName, workflowName, token);
 
                         if (content is null)
                         {
-                            fetchFailCount++;
-                            continue;
+                            Interlocked.Increment(ref fetchFailCount);
+                            return; // `continue` in `foreach` becomes `return` in `ForEachAsync` delegate
                         }
 
                         if (isTerminal)
@@ -85,9 +87,9 @@ internal sealed class SearchCommand(IArmClient armClient)
                     }
 
                     if (!content.Contains(searchTerm, StringComparison.OrdinalIgnoreCase))
-                        continue;
+                        return;
 
-                    matchCount++;
+                    Interlocked.Increment(ref matchCount);
                     var snippet = BuildSnippet(content, searchTerm);
                     var statusColor = run.Properties.Status switch
                     {
@@ -98,14 +100,17 @@ internal sealed class SearchCommand(IArmClient armClient)
                         _                        => "white"
                     };
 
-                    AnsiConsole.MarkupLine(
-                        $"[bold green]MATCH[/]  " +
-                        $"[grey]{run.Properties.StartTime.UtcDateTime:yyyy-MM-dd HH:mm:ss}[/]  " +
-                        $"[{statusColor}]{Markup.Escape(run.Properties.Status)}[/]  " +
-                        $"[dim]{Markup.Escape(run.Name)}[/]");
-                    AnsiConsole.MarkupLine($"  [dim italic]{Markup.Escape(snippet)}[/]");
-                    AnsiConsole.WriteLine();
-                }
+                    lock (_consoleLock) // prevent concurrent console writes from overlapping
+                    {
+                        AnsiConsole.MarkupLine(
+                            $"[bold green]MATCH[/]  " +
+                            $"[grey]{run.Properties.StartTime.UtcDateTime:yyyy-MM-dd HH:mm:ss}[/]  " +
+                            $"[{statusColor}]{Markup.Escape(run.Properties.Status)}[/]  " +
+                            $"[dim]{Markup.Escape(run.Name)}[/]");
+                        AnsiConsole.MarkupLine($"  [dim italic]{Markup.Escape(snippet)}[/]");
+                        AnsiConsole.WriteLine();
+                    }
+                });
             });
 
         AnsiConsole.Write(new Rule());
