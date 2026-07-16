@@ -210,6 +210,116 @@ public class ArmClientTests
     }
 
     [Fact]
+    public async Task ListRunsAsync_WithoutDates_FetchesRunsAndNoFilters()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var content = """
+            {
+                "value": [
+                    { "name": "run1", "properties": { "status": "Succeeded", "startTime": "2023-01-01T00:00:00Z" } },
+                    { "name": "run2", "properties": { "status": "Failed", "startTime": "2023-01-02T00:00:00Z" } }
+                ]
+            }
+            """;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(content) };
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act
+        var runs = new List<WorkflowRun>();
+        await foreach (var run in client.ListRunsAsync("sub-id", "rg", "app", "flow", null, null, CancellationToken.None))
+        {
+            runs.Add(run);
+        }
+
+        // Assert
+        Assert.Single(handler.Requests);
+        var req = handler.Requests[0];
+        Assert.DoesNotContain("filter", req.RequestUri?.Query);
+        Assert.Equal(2, runs.Count);
+        Assert.Equal("run1", runs[0].Name);
+        Assert.Equal("run2", runs[1].Name);
+    }
+
+    [Fact]
+    public async Task ListRunsAsync_WithDates_AppendsFilterCorrectly()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var content = """{ "value": [] }""";
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(content) };
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var start = new DateTimeOffset(2023, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var end = new DateTimeOffset(2023, 1, 2, 0, 0, 0, TimeSpan.Zero);
+
+        // Act
+        var runs = new List<WorkflowRun>();
+        await foreach (var run in client.ListRunsAsync("sub-id", "rg", "app", "flow", start, end, CancellationToken.None))
+        {
+            runs.Add(run);
+        }
+
+        // Assert
+        Assert.Single(handler.Requests);
+        var req = handler.Requests[0];
+        var query = req.RequestUri?.Query;
+        Assert.NotNull(query);
+
+        var expectedFilter = Uri.EscapeDataString($"StartTime ge {start.UtcDateTime:O} and StartTime le {end.UtcDateTime:O}");
+        Assert.Contains($"$filter={expectedFilter}", query);
+    }
+
+    [Fact]
+    public async Task ListRunsAsync_PaginatesSuccessfully()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            if (req.RequestUri?.ToString().Contains("nextLinkPage") == true)
+            {
+                var page2Content = """
+                {
+                    "value": [
+                        { "name": "run2", "properties": { "status": "Failed", "startTime": "2023-01-02T00:00:00Z" } }
+                    ]
+                }
+                """;
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(page2Content) };
+            }
+            else
+            {
+                var page1Content = """
+                {
+                    "value": [
+                        { "name": "run1", "properties": { "status": "Succeeded", "startTime": "2023-01-01T00:00:00Z" } }
+                    ],
+                    "nextLink": "https://management.azure.com/nextLinkPage"
+                }
+                """;
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(page1Content) };
+            }
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act
+        var runs = new List<WorkflowRun>();
+        await foreach (var run in client.ListRunsAsync("sub-id", "rg", "app", "flow", null, null, CancellationToken.None))
+        {
+            runs.Add(run);
+        }
+
+        // Assert
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Equal(2, runs.Count);
+        Assert.Equal("run1", runs[0].Name);
+        Assert.Equal("run2", runs[1].Name);
+    }
+
+    [Fact]
     public async Task DiscoverResourceGroupAsync_FailedRequest_TruncatesContentInExceptionMessage()
     {
         // Arrange
