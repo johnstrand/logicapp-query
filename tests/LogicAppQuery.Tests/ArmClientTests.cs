@@ -196,6 +196,192 @@ public class ArmClientTests
         Assert.Contains("Invalid ARM API URL", exception.Message);
     }
 
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_InvalidAppName_ThrowsArgumentException()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.DiscoverResourceGroupAsync("sub-id", "invalid_app_name!", CancellationToken.None));
+
+        Assert.Contains("Invalid app name format", ex.Message);
+        Assert.Empty(handler.Requests); // No HTTP requests should have been made
+    }
+
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_ValidInput_FindsResource()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var content = """
+            {
+                "value": [
+                    {
+                        "id": "/subscriptions/sub-id/resourceGroups/test-rg/providers/Microsoft.Web/sites/test-app",
+                        "kind": "functionapp,workflowapp"
+                    }
+                ]
+            }
+            """;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(content)
+            };
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act
+        var result = await client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None);
+
+        // Assert
+        Assert.Equal("test-rg", result);
+        Assert.Single(handler.Requests);
+        Assert.Contains("$filter=name eq %27test-app%27 and resourceType eq %27Microsoft.Web%2Fsites%27", handler.Requests[0].RequestUri!.ToString());
+    }
+
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_MultipleResources_PicksWorkflowApp()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var content = """
+            {
+                "value": [
+                    {
+                        "id": "/subscriptions/sub-id/resourceGroups/wrong-rg/providers/Microsoft.Web/sites/test-app",
+                        "kind": "app"
+                    },
+                    {
+                        "id": "/subscriptions/sub-id/resourceGroups/correct-rg/providers/Microsoft.Web/sites/test-app",
+                        "kind": "functionapp,workflowapp"
+                    }
+                ]
+            }
+            """;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(content)
+            };
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act
+        var result = await client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None);
+
+        // Assert
+        Assert.Equal("correct-rg", result);
+    }
+
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_Pagination_FollowsNextLink()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            if (req.RequestUri!.ToString().Contains("next-page"))
+            {
+                var page2 = """
+                {
+                    "value": [
+                        {
+                            "id": "/subscriptions/sub-id/resourceGroups/test-rg/providers/Microsoft.Web/sites/test-app",
+                            "kind": "workflowapp"
+                        }
+                    ]
+                }
+                """;
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(page2) };
+            }
+            else
+            {
+                var page1 = """
+                {
+                    "value": [],
+                    "nextLink": "https://management.azure.com/next-page"
+                }
+                """;
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(page1) };
+            }
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act
+        var result = await client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None);
+
+        // Assert
+        Assert.Equal("test-rg", result);
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_EmptyPages_RetriesAndFindsResource()
+    {
+        // Arrange
+        int requestCount = 0;
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            requestCount++;
+            if (requestCount == 1) // First attempt
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{"value":[]}""")
+                };
+            }
+            else // Second attempt (retry)
+            {
+                var content = """
+                {
+                    "value": [
+                        {
+                            "id": "/subscriptions/sub-id/resourceGroups/retry-rg/providers/Microsoft.Web/sites/test-app",
+                            "kind": "workflowapp"
+                        }
+                    ]
+                }
+                """;
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent(content)
+                };
+            }
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act
+        var result = await client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None);
+
+        // Assert
+        Assert.Equal("retry-rg", result);
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_EmptyPages_ThrowsAfter3Attempts()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"value":[]}""")
+            };
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None));
+
+        Assert.Contains("No site named 'test-app' found", ex.Message);
+        Assert.Equal(3, handler.Requests.Count); // 3 attempts made
+    }
+
     private class FakeTokenCredential : Azure.Core.TokenCredential
     {
         public override Azure.Core.AccessToken GetToken(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
