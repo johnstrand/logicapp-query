@@ -3,10 +3,12 @@ using System.Text.Json;
 
 namespace LogicAppQuery;
 
-internal sealed class SearchCommand(IArmClient armClient)
+internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory = null, IAnsiConsole? ansiConsole = null)
 {
     const int SnippetRadius = 100;
     const int MaxSnippetLength = 300;
+
+    private readonly IAnsiConsole _console = ansiConsole ?? AnsiConsole.Console;
 
     public async Task ExecuteAsync(
         string subscriptionId,
@@ -17,14 +19,14 @@ internal sealed class SearchCommand(IArmClient armClient)
         DateTimeOffset? end,
         CancellationToken ct)
     {
-        AnsiConsole.MarkupLine($"[bold]App:[/]      [cyan]{Markup.Escape(appName)}[/]");
-        AnsiConsole.MarkupLine($"[bold]Workflow:[/] [cyan]{Markup.Escape(workflowName)}[/]");
-        AnsiConsole.MarkupLine($"[bold]Search:[/]   [yellow]{Markup.Escape(searchTerm)}[/]");
-        if (start.HasValue) AnsiConsole.MarkupLine($"[bold]From:[/]     {start.Value.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC");
-        if (end.HasValue)   AnsiConsole.MarkupLine($"[bold]To:[/]       {end.Value.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC");
-        AnsiConsole.WriteLine();
+        _console.MarkupLine($"[bold]App:[/]      [cyan]{Markup.Escape(appName)}[/]");
+        _console.MarkupLine($"[bold]Workflow:[/] [cyan]{Markup.Escape(workflowName)}[/]");
+        _console.MarkupLine($"[bold]Search:[/]   [yellow]{Markup.Escape(searchTerm)}[/]");
+        if (start.HasValue) _console.MarkupLine($"[bold]From:[/]     {start.Value.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC");
+        if (end.HasValue)   _console.MarkupLine($"[bold]To:[/]       {end.Value.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC");
+        _console.WriteLine();
 
-        AnsiConsole.Markup("[grey]Discovering resource group...[/] ");
+        _console.Markup("[grey]Discovering resource group...[/] ");
         string resourceGroup;
         try
         {
@@ -32,18 +34,18 @@ internal sealed class SearchCommand(IArmClient armClient)
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine("[red]failed[/]");
-            AnsiConsole.MarkupLine($"[red]Error:[/] {Markup.Escape(ex.Message)}");
+            _console.MarkupLine("[red]failed[/]");
+            _console.MarkupLine($"[red]Error:[/] {Markup.Escape(ex.Message)}");
             return;
         }
-        AnsiConsole.MarkupLine($"[green]{Markup.Escape(resourceGroup)}[/]");
-        AnsiConsole.WriteLine();
+        _console.MarkupLine($"[green]{Markup.Escape(resourceGroup)}[/]");
+        _console.WriteLine();
 
-        await using var cache = await RunCache.LoadAsync(appName, workflowName);
+        await using var cache = await RunCache.LoadAsync(appName, workflowName, cacheDirectory);
 
         int runCount = 0, matchCount = 0, fetchFailCount = 0, cacheHits = 0;
 
-        await AnsiConsole.Status()
+        await _console.Status()
             .Spinner(Spinner.Known.Dots)
             .StartAsync("Starting...", async ctx =>
             {
@@ -98,25 +100,25 @@ internal sealed class SearchCommand(IArmClient armClient)
                         _                        => "white"
                     };
 
-                    AnsiConsole.MarkupLine(
+                    _console.MarkupLine(
                         $"[bold green]MATCH[/]  " +
                         $"[grey]{run.Properties.StartTime.UtcDateTime:yyyy-MM-dd HH:mm:ss}[/]  " +
                         $"[{statusColor}]{Markup.Escape(run.Properties.Status)}[/]  " +
                         $"[dim]{Markup.Escape(run.Name)}[/]");
-                    AnsiConsole.MarkupLine($"  [dim italic]{Markup.Escape(snippet)}[/]");
-                    AnsiConsole.WriteLine();
+                    _console.MarkupLine($"  [dim italic]{Markup.Escape(snippet)}[/]");
+                    _console.WriteLine();
                 }
             });
 
-        AnsiConsole.Write(new Rule());
-        AnsiConsole.MarkupLine(
+        _console.Write(new Rule());
+        _console.MarkupLine(
             matchCount > 0
                 ? $"Searched [bold]{runCount}[/] run(s). Found [bold green]{matchCount}[/] match(es)."
                 : $"Searched [bold]{runCount}[/] run(s). [yellow]No matches found.[/]");
         if (cacheHits > 0)
-            AnsiConsole.MarkupLine($"[grey]{cacheHits} run(s) loaded from cache.[/]");
+            _console.MarkupLine($"[grey]{cacheHits} run(s) loaded from cache.[/]");
         if (fetchFailCount > 0)
-            AnsiConsole.MarkupLine($"[yellow]Warning:[/] Could not read content for {fetchFailCount} run(s) — they were skipped.");
+            _console.MarkupLine($"[yellow]Warning:[/] Could not read content for {fetchFailCount} run(s) — they were skipped.");
     }
 
     internal async Task<string?> BuildRunContentAsync(

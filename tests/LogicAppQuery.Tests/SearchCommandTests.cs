@@ -1,3 +1,6 @@
+using Spectre.Console.Testing;
+using System.Collections.Generic;
+using System.IO;
 using System;
 using Xunit;
 using LogicAppQuery;
@@ -233,5 +236,58 @@ public class SearchCommandTests
     {
         var result = SearchCommand.BuildSnippet("", "");
         Assert.Equal(string.Empty, result);
+    }
+
+    private class FakeArmClient : IArmClient
+    {
+        public Task<string> DiscoverResourceGroupAsync(string subscriptionId, string appName, CancellationToken ct)
+            => Task.FromResult("rg");
+
+        public async IAsyncEnumerable<WorkflowRun> ListRunsAsync(string subscriptionId, string resourceGroup, string appName, string workflowName, DateTimeOffset? start, DateTimeOffset? end, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            yield return new WorkflowRun("run1", new WorkflowRunProperties("Succeeded", DateTimeOffset.UtcNow, null));
+            yield return new WorkflowRun("run2", new WorkflowRunProperties("Failed", DateTimeOffset.UtcNow, null));
+            await Task.CompletedTask;
+        }
+
+        public async IAsyncEnumerable<WorkflowAction> ListActionsAsync(string subscriptionId, string resourceGroup, string appName, string workflowName, string runName, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            if (runName == "run1")
+            {
+                yield return new WorkflowAction("action1", new WorkflowActionProperties("Succeeded", new ContentLink("http://test/input", 10), null, null, null));
+            }
+            await Task.CompletedTask;
+        }
+
+        public Task<string?> FetchContentAsync(ContentLink link, CancellationToken ct)
+        {
+            if (link.Uri == "http://test/input") return Task.FromResult<string?>("This is my secretsearchTerm here.");
+            return Task.FromResult<string?>(null);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_FindsMatchesAndWritesToConsole()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            var fakeClient = new FakeArmClient();
+            var testConsole = new TestConsole();
+            testConsole.Profile.Capabilities.Interactive = false;
+            var command = new SearchCommand(fakeClient, cacheDirectory: tempDir, ansiConsole: testConsole);
+
+            await command.ExecuteAsync("subId", "appName", "workflowName", "secretsearchTerm", null, null, CancellationToken.None);
+
+            var output = testConsole.Output;
+            Assert.Contains("match(es)", output);
+            Assert.Contains("Searched 2 run(s)", output);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
     }
 }
