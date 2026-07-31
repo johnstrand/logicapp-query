@@ -194,7 +194,7 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
         if (string.IsNullOrEmpty(link.Uri)) return null;
         if (link.ContentSize > MaxInputSizeBytes) return null;
 
-        if (!Uri.TryCreate(link.Uri, UriKind.Absolute, out var parsedUri) || !IsAllowedHost(parsedUri.Host))
+        if (!Uri.TryCreate(link.Uri, UriKind.Absolute, out var parsedUri) || parsedUri.Scheme != Uri.UriSchemeHttps || !IsAllowedHost(parsedUri.Host))
         {
             return null;
         }
