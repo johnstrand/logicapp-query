@@ -88,7 +88,7 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
                                 run.Properties.Status, run.Properties.StartTime, content));
                     }
 
-                    if (!content.Contains(searchTerm, StringComparison.OrdinalIgnoreCase))
+                    if (!content.AsSpan().Contains(searchTerm.AsSpan(), StringComparison.OrdinalIgnoreCase))
                         return;
 
                     Interlocked.Increment(ref matchCount);
