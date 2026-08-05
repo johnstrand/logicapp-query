@@ -132,6 +132,22 @@ public class ArmClientTests
     }
 
     [Fact]
+    public async Task FetchContentAsync_LargeContentSize_ReturnsNullAndMakesNoRequests()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("https://management.azure.com/some/path", (5 * 1024 * 1024) + 1);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Null(result);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
     public async Task FetchContentAsync_ArbitraryDomain_ReturnsNullAndMakesNoRequests()
     {
         // Arrange
