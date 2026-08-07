@@ -199,6 +199,9 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
         JsonElement? inlined,
         CancellationToken ct)
     {
+        if (inlined is { ValueKind: not JsonValueKind.Undefined } el)
+            return el.GetRawText();
+
         if (link is not null)
         {
             try
@@ -208,12 +211,9 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
             }
             catch (Exception ex)
             {
-                AnsiConsole.MarkupLine($"[yellow]Warning:[/] Failed to fetch content link ({Markup.Escape(ex.Message)}). Falling back to inlined content.");
+                AnsiConsole.MarkupLine($"[yellow]Warning:[/] Failed to fetch content link ({Markup.Escape(ex.Message)}).");
             }
         }
-
-        if (inlined is { ValueKind: not JsonValueKind.Undefined } el)
-            return el.GetRawText();
 
         return null;
     }
