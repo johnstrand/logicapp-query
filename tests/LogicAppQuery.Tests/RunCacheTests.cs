@@ -218,4 +218,22 @@ public class RunCacheTests
     {
         Assert.True(RunCache.IsTerminal(status!));
     }
+
+    [Fact]
+    public void ProtectContent_And_UnprotectContent_WorkCorrectly()
+    {
+        var input = "test content with sensitive data";
+        var protectedContent = RunCache.ProtectContent(input);
+
+        Assert.NotNull(protectedContent);
+        // On non-Windows platforms, it will fallback to plaintext.
+        // We ensure that protecting and then unprotecting returns the original text.
+        var unprotectedContent = RunCache.UnprotectContent(protectedContent);
+        Assert.Equal(input, unprotectedContent);
+
+        // Verify handling of plaintext/legacy unencrypted data in UnprotectContent
+        var unencryptedLegacy = "{\"key\":\"value\"}";
+        var handledLegacy = RunCache.UnprotectContent(unencryptedLegacy);
+        Assert.Equal(unencryptedLegacy, handledLegacy);
+    }
 }
