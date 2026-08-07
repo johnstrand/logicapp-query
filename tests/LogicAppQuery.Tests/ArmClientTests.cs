@@ -113,6 +113,22 @@ public class ArmClientTests
         Assert.Equal("my-resource-group", result);
     }
     [Fact]
+    public async Task FetchContentAsync_EmptyUri_ReturnsNullAndMakesNoRequests()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink(string.Empty, 100);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Null(result);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
     public async Task FetchContentAsync_ManagementAzureCom_SendsBearerToken()
     {
         // Arrange
