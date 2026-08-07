@@ -473,6 +473,24 @@ public class ArmClientTests
         }
     }
 
+    private class CountingTokenCredential : Azure.Core.TokenCredential
+    {
+        public int GetTokenCallCount { get; private set; }
+        public DateTimeOffset ExpiresOn { get; set; } = DateTimeOffset.UtcNow.AddHours(1);
+
+        public override Azure.Core.AccessToken GetToken(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
+        {
+            GetTokenCallCount++;
+            return new Azure.Core.AccessToken("fake-token", ExpiresOn);
+        }
+
+        public override ValueTask<Azure.Core.AccessToken> GetTokenAsync(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
+        {
+            GetTokenCallCount++;
+            return new ValueTask<Azure.Core.AccessToken>(new Azure.Core.AccessToken("fake-token", ExpiresOn));
+        }
+    }
+
     [Fact]
     public async Task ListRunsAsync_WithoutDates_FetchesRunsAndNoFilters()
     {
@@ -535,6 +553,66 @@ public class ArmClientTests
 
         var expectedFilter = Uri.EscapeDataString($"StartTime ge {start.UtcDateTime:O} and StartTime le {end.UtcDateTime:O}");
         Assert.Contains($"$filter={expectedFilter}", query);
+    }
+
+    [Fact]
+    public async Task GetBearerTokenAsync_ValidToken_IsCached()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var content = """{ "value": [] }""";
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(content) };
+        });
+        var credential = new CountingTokenCredential();
+
+        var client = new ArmClient(credential, new HttpClient(handler));
+
+        // Act
+        var runs = new List<WorkflowRun>();
+        await foreach (var run in client.ListRunsAsync("sub-id", "rg", "app", "flow", null, null, CancellationToken.None))
+        {
+            runs.Add(run);
+        }
+        await foreach (var run in client.ListRunsAsync("sub-id", "rg", "app", "flow", null, null, CancellationToken.None))
+        {
+            runs.Add(run);
+        }
+
+        // Assert
+        Assert.Equal(1, credential.GetTokenCallCount);
+    }
+
+    [Fact]
+    public async Task GetBearerTokenAsync_TokenNearExpiry_FetchesNewToken()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var content = """{ "value": [] }""";
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(content) };
+        });
+        var credential = new CountingTokenCredential();
+
+        // Return a token that is already within the 5-minute expiration window
+        credential.ExpiresOn = DateTimeOffset.UtcNow.AddMinutes(4);
+
+        var client = new ArmClient(credential, new HttpClient(handler));
+
+        // Act
+        var runs = new List<WorkflowRun>();
+        await foreach (var run in client.ListRunsAsync("sub-id", "rg", "app", "flow", null, null, CancellationToken.None))
+        {
+            runs.Add(run);
+        }
+
+        await foreach (var run in client.ListRunsAsync("sub-id", "rg", "app", "flow", null, null, CancellationToken.None))
+        {
+            runs.Add(run);
+        }
+
+        // Assert
+        Assert.Equal(2, credential.GetTokenCallCount);
     }
 
     [Fact]
