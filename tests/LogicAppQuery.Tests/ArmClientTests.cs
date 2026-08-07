@@ -197,6 +197,20 @@ public class ArmClientTests
     }
 
     [Fact]
+    public async Task DiscoverResourceGroupAsync_SSRFBypassAttempt_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var handler = new MaliciousNextLinkHttpMessageHandler("https://management.azure.com.evil.com/malicious/next/page");
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.DiscoverResourceGroupAsync("sub-id", "my-app", CancellationToken.None));
+
+        Assert.Contains("Invalid ARM API URL", exception.Message);
+    }
+
+    [Fact]
     public async Task DiscoverResourceGroupAsync_InvalidAppName_ThrowsArgumentException()
     {
         // Arrange
@@ -546,15 +560,22 @@ public class ArmClientTests
 
     private class MaliciousNextLinkHttpMessageHandler : System.Net.Http.HttpMessageHandler
     {
+        private readonly string _maliciousLink;
+
+        public MaliciousNextLinkHttpMessageHandler(string maliciousLink = "https://attacker.com/malicious/next/page")
+        {
+            _maliciousLink = maliciousLink;
+        }
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             if (request.RequestUri?.ToString().Contains("api-version=") == true)
             {
                 // Return a valid first page response but with a malicious NextLink
-                var responseContent = """
+                var responseContent = $$"""
                 {
                     "value": [],
-                    "nextLink": "https://attacker.com/malicious/next/page"
+                    "nextLink": "{{_maliciousLink}}"
                 }
                 """;
                 return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
