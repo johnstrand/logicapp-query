@@ -190,6 +190,10 @@ internal sealed class RunCache : IAsyncDisposable
     internal static string ProtectContent(string content)
     {
         if (string.IsNullOrEmpty(content)) return content;
+
+        if (!OperatingSystem.IsWindows())
+            return content;
+
         try
         {
             var plainBytes = Encoding.UTF8.GetBytes(content);
@@ -205,6 +209,10 @@ internal sealed class RunCache : IAsyncDisposable
     internal static string UnprotectContent(string content)
     {
         if (string.IsNullOrEmpty(content)) return content;
+
+        if (!OperatingSystem.IsWindows())
+            return content;
+
         try
         {
             var protectedBytes = Convert.FromBase64String(content);
