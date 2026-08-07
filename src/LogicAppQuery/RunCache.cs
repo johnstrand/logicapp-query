@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
@@ -110,7 +112,7 @@ internal sealed class RunCache : IAsyncDisposable
                             runNameParam.Value = kvp.Key;
                             statusParam.Value = kvp.Value.Status;
                             startTimeParam.Value = kvp.Value.StartTime.ToString("o"); // ISO 8601
-                            contentParam.Value = kvp.Value.Content;
+                            contentParam.Value = ProtectContent(kvp.Value.Content);
                             await command.ExecuteNonQueryAsync();
                         }
                     }
@@ -149,7 +151,7 @@ internal sealed class RunCache : IAsyncDisposable
         {
             var status = reader.GetString(0);
             var startTimeStr = reader.GetString(1);
-            var content = reader.GetString(2);
+            var content = UnprotectContent(reader.GetString(2));
 
             if (DateTimeOffset.TryParse(startTimeStr, out var startTime))
             {
@@ -180,13 +182,59 @@ internal sealed class RunCache : IAsyncDisposable
         command.Parameters.AddWithValue("$RunName", runName);
         command.Parameters.AddWithValue("$Status", run.Status);
         command.Parameters.AddWithValue("$StartTime", run.StartTime.ToString("o"));
-        command.Parameters.AddWithValue("$Content", run.Content);
+        command.Parameters.AddWithValue("$Content", ProtectContent(run.Content));
 
         await command.ExecuteNonQueryAsync();
         }
         finally
         {
             _dbLock.Release();
+        }
+    }
+
+    internal static string ProtectContent(string content)
+    {
+        if (string.IsNullOrEmpty(content)) return content;
+
+        if (!OperatingSystem.IsWindows())
+            return content;
+
+        try
+        {
+            var plainBytes = Encoding.UTF8.GetBytes(content);
+            var protectedBytes = ProtectedData.Protect(plainBytes, null, DataProtectionScope.CurrentUser);
+            return Convert.ToBase64String(protectedBytes);
+        }
+        catch (PlatformNotSupportedException)
+        {
+            return content;
+        }
+    }
+
+    internal static string UnprotectContent(string content)
+    {
+        if (string.IsNullOrEmpty(content)) return content;
+
+        if (!OperatingSystem.IsWindows())
+            return content;
+
+        try
+        {
+            var protectedBytes = Convert.FromBase64String(content);
+            var plainBytes = ProtectedData.Unprotect(protectedBytes, null, DataProtectionScope.CurrentUser);
+            return Encoding.UTF8.GetString(plainBytes);
+        }
+        catch (PlatformNotSupportedException)
+        {
+            return content;
+        }
+        catch (CryptographicException)
+        {
+            return content;
+        }
+        catch (FormatException)
+        {
+            return content;
         }
     }
 
