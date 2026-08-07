@@ -64,6 +64,13 @@ internal sealed class RunCache : IAsyncDisposable
 
         var cache = new RunCache(connection, appName, workflowName);
 
+        await MigrateLegacyCacheAsync(connection, dir, appName, workflowName);
+
+        return cache;
+    }
+
+    private static async Task MigrateLegacyCacheAsync(SqliteConnection connection, string dir, string appName, string workflowName)
+    {
         // Lazy migration
         var fileName = Sanitize(appName) + "-" + Sanitize(workflowName) + ".cache.json";
         var legacyFilePath = Path.Combine(dir, fileName);
@@ -118,8 +125,6 @@ internal sealed class RunCache : IAsyncDisposable
                 AnsiConsole.MarkupLine($"[yellow]Warning:[/] Could not migrate legacy cache file. Starting fresh for this app/workflow. ({Markup.Escape(ex.Message)})");
             }
         }
-
-        return cache;
     }
 
     private readonly System.Threading.SemaphoreSlim _dbLock = new(1, 1);
