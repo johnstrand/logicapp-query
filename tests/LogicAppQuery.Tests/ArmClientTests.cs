@@ -113,6 +113,22 @@ public class ArmClientTests
         Assert.Equal("my-resource-group", result);
     }
     [Fact]
+    public async Task FetchContentAsync_EmptyUri_ReturnsNullAndMakesNoRequests()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink(string.Empty, 100);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Null(result);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
     public async Task FetchContentAsync_ManagementAzureCom_SendsBearerToken()
     {
         // Arrange
@@ -129,6 +145,38 @@ public class ArmClientTests
         Assert.NotNull(req.Headers.Authorization);
         Assert.Equal("Bearer", req.Headers.Authorization.Scheme);
         Assert.Equal("fake-token", req.Headers.Authorization.Parameter);
+    }
+
+    [Fact]
+    public async Task FetchContentAsync_LargeContentSize_ReturnsNullAndMakesNoRequests()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("https://management.azure.com/some/path", (5 * 1024 * 1024) + 1);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Null(result);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task FetchContentAsync_HttpDomain_ReturnsNullAndMakesNoRequests()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("http://management.azure.com/some/path", 100);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Null(result);
+        Assert.Empty(handler.Requests);
     }
 
     [Fact]
@@ -203,6 +251,20 @@ public class ArmClientTests
     {
         // Arrange
         var handler = new MaliciousNextLinkHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.DiscoverResourceGroupAsync("sub-id", "my-app", CancellationToken.None));
+
+        Assert.Contains("Invalid ARM API URL", exception.Message);
+    }
+
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_SSRFBypassAttempt_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var handler = new MaliciousNextLinkHttpMessageHandler("https://management.azure.com.evil.com/malicious/next/page");
         var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
 
         // Act & Assert
@@ -562,15 +624,22 @@ public class ArmClientTests
 
     private class MaliciousNextLinkHttpMessageHandler : System.Net.Http.HttpMessageHandler
     {
+        private readonly string _maliciousLink;
+
+        public MaliciousNextLinkHttpMessageHandler(string maliciousLink = "https://attacker.com/malicious/next/page")
+        {
+            _maliciousLink = maliciousLink;
+        }
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             if (request.RequestUri?.ToString().Contains("api-version=") == true)
             {
                 // Return a valid first page response but with a malicious NextLink
-                var responseContent = """
+                var responseContent = $$"""
                 {
                     "value": [],
-                    "nextLink": "https://attacker.com/malicious/next/page"
+                    "nextLink": "{{_maliciousLink}}"
                 }
                 """;
                 return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
