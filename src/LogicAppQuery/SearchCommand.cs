@@ -44,7 +44,15 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
 
         await using var cache = await RunCache.LoadAsync(appName, workflowName, cacheDirectory);
 
-        int runCount = 0, matchCount = 0, fetchFailCount = 0, cacheHits = 0;
+        var state = new SearchState
+        {
+            Cache = cache,
+            SubscriptionId = subscriptionId,
+            ResourceGroup = resourceGroup,
+            AppName = appName,
+            WorkflowName = workflowName,
+            SearchTerm = searchTerm
+        };
 
         await _console.Status()
             .Spinner(Spinner.Known.Dots)
@@ -54,76 +62,81 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
                 await Parallel.ForEachAsync(armClient.ListRunsAsync(
                     subscriptionId, resourceGroup, appName, workflowName, start, end, ct), options, async (run, token) =>
                 {
-                    Interlocked.Increment(ref runCount);
-                    ctx.Status(
-                        $"{run.Properties.StartTime.UtcDateTime:yyyy-MM-dd}  |  " +
-                        $"Searched {runCount} run(s), {matchCount} match(es)" +
-                        (cacheHits > 0 ? $" ({cacheHits} from cache)" : "") +
-                        (fetchFailCount > 0 ? $", {fetchFailCount} unreadable" : "") +
-                        "...");
-
-                    var isTerminal = RunCache.IsTerminal(run.Properties.Status);
-                    string? content;
-
-                    var cached = isTerminal ? await cache.TryGetAsync(run.Name) : null;
-
-                    if (cached is not null)
-                    {
-                        content = cached.Content;
-                        Interlocked.Increment(ref cacheHits);
-                    }
-                    else
-                    {
-                        content = await BuildRunContentAsync(
-                            run, subscriptionId, resourceGroup, appName, workflowName, token);
-
-                        if (content is null)
-                        {
-                            Interlocked.Increment(ref fetchFailCount);
-                            return; // `continue` in `foreach` becomes `return` in `ForEachAsync` delegate
-                        }
-
-                        if (isTerminal)
-                            await cache.SetAsync(run.Name, new CachedRun(
-                                run.Properties.Status, run.Properties.StartTime, content));
-                    }
-
-                    if (!content.Contains(searchTerm, StringComparison.OrdinalIgnoreCase))
-                        return;
-
-                    Interlocked.Increment(ref matchCount);
-                    var snippet = BuildSnippet(content, searchTerm);
-                    var statusColor = run.Properties.Status switch
-                    {
-                        "Succeeded"              => "green",
-                        "Failed"                 => "red",
-                        "Running"                => "blue",
-                        "Cancelled" or "Skipped" => "grey",
-                        _                        => "white"
-                    };
-
-                    lock (_consoleLock) // prevent concurrent console writes from overlapping
-                    {
-                        _console.MarkupLine(
-                            $"[bold green]MATCH[/]  " +
-                            $"[grey]{run.Properties.StartTime.UtcDateTime:yyyy-MM-dd HH:mm:ss}[/]  " +
-                            $"[{statusColor}]{Markup.Escape(run.Properties.Status)}[/]  " +
-                            $"[dim]{Markup.Escape(run.Name)}[/]");
-                        _console.MarkupLine($"  [dim italic]{Markup.Escape(snippet)}[/]");
-                        _console.WriteLine();
-                    }
+                    await ProcessRunAsync(run, state, ctx, token);
                 });
             });
 
         _console.Write(new Rule());
         _console.MarkupLine(
-            matchCount > 0
-                ? $"Searched [bold]{runCount}[/] run(s). Found [bold green]{matchCount}[/] match(es)."
-                : $"Searched [bold]{runCount}[/] run(s). [yellow]No matches found.[/]");
-        if (cacheHits > 0)
-            _console.MarkupLine($"[grey]{cacheHits} run(s) loaded from cache.[/]");
-        if (fetchFailCount > 0)
-            _console.MarkupLine($"[yellow]Warning:[/] Could not read content for {fetchFailCount} run(s) — they were skipped.");
+            state.MatchCount > 0
+                ? $"Searched [bold]{state.RunCount}[/] run(s). Found [bold green]{state.MatchCount}[/] match(es)."
+                : $"Searched [bold]{state.RunCount}[/] run(s). [yellow]No matches found.[/]");
+        if (state.CacheHits > 0)
+            _console.MarkupLine($"[grey]{state.CacheHits} run(s) loaded from cache.[/]");
+        if (state.FetchFailCount > 0)
+            _console.MarkupLine($"[yellow]Warning:[/] Could not read content for {state.FetchFailCount} run(s) — they were skipped.");
+    }
+
+    private async Task ProcessRunAsync(WorkflowRun run, SearchState state, StatusContext ctx, CancellationToken token)
+    {
+        Interlocked.Increment(ref state.RunCount);
+        ctx.Status(
+            $"{run.Properties.StartTime.UtcDateTime:yyyy-MM-dd}  |  " +
+            $"Searched {state.RunCount} run(s), {state.MatchCount} match(es)" +
+            (state.CacheHits > 0 ? $" ({state.CacheHits} from cache)" : "") +
+            (state.FetchFailCount > 0 ? $", {state.FetchFailCount} unreadable" : "") +
+            "...");
+
+        var isTerminal = RunCache.IsTerminal(run.Properties.Status);
+        string? content;
+
+        var cached = isTerminal ? await state.Cache.TryGetAsync(run.Name) : null;
+
+        if (cached is not null)
+        {
+            content = cached.Content;
+            Interlocked.Increment(ref state.CacheHits);
+        }
+        else
+        {
+            content = await BuildRunContentAsync(
+                run, state.SubscriptionId, state.ResourceGroup, state.AppName, state.WorkflowName, token);
+
+            if (content is null)
+            {
+                Interlocked.Increment(ref state.FetchFailCount);
+                return; // `continue` in `foreach` becomes `return` in `ForEachAsync` delegate
+            }
+
+            if (isTerminal)
+                await state.Cache.SetAsync(run.Name, new CachedRun(
+                    run.Properties.Status, run.Properties.StartTime, content));
+        }
+
+        if (!content.AsSpan().Contains(state.SearchTerm.AsSpan(), StringComparison.OrdinalIgnoreCase))
+            return;
+
+        Interlocked.Increment(ref state.MatchCount);
+        var snippet = BuildSnippet(content, state.SearchTerm);
+        var statusColor = run.Properties.Status switch
+        {
+            "Succeeded"              => "green",
+            "Failed"                 => "red",
+            "Running"                => "blue",
+            "Cancelled" or "Skipped" => "grey",
+            _                        => "white"
+        };
+
+        lock (_consoleLock) // prevent concurrent console writes from overlapping
+        {
+            _console.MarkupLine(
+                $"[bold green]MATCH[/]  " +
+                $"[grey]{run.Properties.StartTime.UtcDateTime:yyyy-MM-dd HH:mm:ss}[/]  " +
+                $"[{statusColor}]{Markup.Escape(run.Properties.Status)}[/]  " +
+                $"[dim]{Markup.Escape(run.Name)}[/]");
+            _console.MarkupLine($"  [dim italic]{Markup.Escape(snippet)}[/]");
+            _console.WriteLine();
+        }
     }
 
     internal async Task<string?> BuildRunContentAsync(
@@ -208,6 +221,21 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
         return null;
     }
 
+    private sealed class SearchState
+    {
+        public int RunCount;
+        public int MatchCount;
+        public int FetchFailCount;
+        public int CacheHits;
+
+        public required RunCache Cache { get; init; }
+        public required string SubscriptionId { get; init; }
+        public required string ResourceGroup { get; init; }
+        public required string AppName { get; init; }
+        public required string WorkflowName { get; init; }
+        public required string SearchTerm { get; init; }
+    }
+
     internal static string BuildSnippet(string content, string searchTerm)
     {
         var idx = content.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase);
@@ -218,8 +246,8 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
         var raw    = content[start..end].ReplaceLineEndings(" ");
         var prefix = start > 0 ? "..." : "";
         var suffix = end < content.Length ? "..." : "";
-        var snippet = prefix + raw + suffix;
-        return snippet.Length > MaxSnippetLength ? snippet[..MaxSnippetLength] + "..." : snippet;
+        var snippet = $"{prefix}{raw}{suffix}";
+        return snippet.Length > MaxSnippetLength ? $"{snippet.AsSpan(0, MaxSnippetLength)}..." : snippet;
     }
 }
 

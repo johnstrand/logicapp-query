@@ -113,6 +113,22 @@ public class ArmClientTests
         Assert.Equal("my-resource-group", result);
     }
     [Fact]
+    public async Task FetchContentAsync_EmptyUri_ReturnsNullAndMakesNoRequests()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink(string.Empty, 100);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Null(result);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
     public async Task FetchContentAsync_ManagementAzureCom_SendsBearerToken()
     {
         // Arrange
@@ -132,12 +148,60 @@ public class ArmClientTests
     }
 
     [Fact]
+    public async Task FetchContentAsync_LargeContentSize_ReturnsNullAndMakesNoRequests()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("https://management.azure.com/some/path", (5 * 1024 * 1024) + 1);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Null(result);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task FetchContentAsync_HttpDomain_ReturnsNullAndMakesNoRequests()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("http://management.azure.com/some/path", 100);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Null(result);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
     public async Task FetchContentAsync_ArbitraryDomain_ReturnsNullAndMakesNoRequests()
     {
         // Arrange
         var handler = new MockHttpMessageHandler();
         var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
         var link = new ContentLink("https://attacker.com/some/path", 100);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Null(result);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task FetchContentAsync_HttpScheme_ReturnsNullAndMakesNoRequests()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("http://management.azure.com/some/path", 100);
 
         // Act
         var result = await client.FetchContentAsync(link, CancellationToken.None);
@@ -187,6 +251,20 @@ public class ArmClientTests
     {
         // Arrange
         var handler = new MaliciousNextLinkHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.DiscoverResourceGroupAsync("sub-id", "my-app", CancellationToken.None));
+
+        Assert.Contains("Invalid ARM API URL", exception.Message);
+    }
+
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_SSRFBypassAttempt_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var handler = new MaliciousNextLinkHttpMessageHandler("https://management.azure.com.evil.com/malicious/next/page");
         var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
 
         // Act & Assert
@@ -395,6 +473,24 @@ public class ArmClientTests
         }
     }
 
+    private class CountingTokenCredential : Azure.Core.TokenCredential
+    {
+        public int GetTokenCallCount { get; private set; }
+        public DateTimeOffset ExpiresOn { get; set; } = DateTimeOffset.UtcNow.AddHours(1);
+
+        public override Azure.Core.AccessToken GetToken(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
+        {
+            GetTokenCallCount++;
+            return new Azure.Core.AccessToken("fake-token", ExpiresOn);
+        }
+
+        public override ValueTask<Azure.Core.AccessToken> GetTokenAsync(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
+        {
+            GetTokenCallCount++;
+            return new ValueTask<Azure.Core.AccessToken>(new Azure.Core.AccessToken("fake-token", ExpiresOn));
+        }
+    }
+
     [Fact]
     public async Task ListRunsAsync_WithoutDates_FetchesRunsAndNoFilters()
     {
@@ -457,6 +553,66 @@ public class ArmClientTests
 
         var expectedFilter = Uri.EscapeDataString($"StartTime ge {start.UtcDateTime:O} and StartTime le {end.UtcDateTime:O}");
         Assert.Contains($"$filter={expectedFilter}", query);
+    }
+
+    [Fact]
+    public async Task GetBearerTokenAsync_ValidToken_IsCached()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var content = """{ "value": [] }""";
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(content) };
+        });
+        var credential = new CountingTokenCredential();
+
+        var client = new ArmClient(credential, new HttpClient(handler));
+
+        // Act
+        var runs = new List<WorkflowRun>();
+        await foreach (var run in client.ListRunsAsync("sub-id", "rg", "app", "flow", null, null, CancellationToken.None))
+        {
+            runs.Add(run);
+        }
+        await foreach (var run in client.ListRunsAsync("sub-id", "rg", "app", "flow", null, null, CancellationToken.None))
+        {
+            runs.Add(run);
+        }
+
+        // Assert
+        Assert.Equal(1, credential.GetTokenCallCount);
+    }
+
+    [Fact]
+    public async Task GetBearerTokenAsync_TokenNearExpiry_FetchesNewToken()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var content = """{ "value": [] }""";
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(content) };
+        });
+        var credential = new CountingTokenCredential();
+
+        // Return a token that is already within the 5-minute expiration window
+        credential.ExpiresOn = DateTimeOffset.UtcNow.AddMinutes(4);
+
+        var client = new ArmClient(credential, new HttpClient(handler));
+
+        // Act
+        var runs = new List<WorkflowRun>();
+        await foreach (var run in client.ListRunsAsync("sub-id", "rg", "app", "flow", null, null, CancellationToken.None))
+        {
+            runs.Add(run);
+        }
+
+        await foreach (var run in client.ListRunsAsync("sub-id", "rg", "app", "flow", null, null, CancellationToken.None))
+        {
+            runs.Add(run);
+        }
+
+        // Assert
+        Assert.Equal(2, credential.GetTokenCallCount);
     }
 
     [Fact]
@@ -546,15 +702,22 @@ public class ArmClientTests
 
     private class MaliciousNextLinkHttpMessageHandler : System.Net.Http.HttpMessageHandler
     {
+        private readonly string _maliciousLink;
+
+        public MaliciousNextLinkHttpMessageHandler(string maliciousLink = "https://attacker.com/malicious/next/page")
+        {
+            _maliciousLink = maliciousLink;
+        }
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             if (request.RequestUri?.ToString().Contains("api-version=") == true)
             {
                 // Return a valid first page response but with a malicious NextLink
-                var responseContent = """
+                var responseContent = $$"""
                 {
                     "value": [],
-                    "nextLink": "https://attacker.com/malicious/next/page"
+                    "nextLink": "{{_maliciousLink}}"
                 }
                 """;
                 return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)

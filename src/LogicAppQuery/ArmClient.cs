@@ -41,9 +41,11 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
 
     async Task<T> GetArmJsonAsync<T>(string url, CancellationToken ct)
     {
-        if (!url.StartsWith(ArmBase, StringComparison.OrdinalIgnoreCase))
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var parsedUri) ||
+            !parsedUri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ||
+            !parsedUri.Host.Equals("management.azure.com", StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException($"Invalid ARM API URL. URL must start with {ArmBase}");
+            throw new InvalidOperationException($"Invalid ARM API URL. URL must be a valid https URL for management.azure.com");
         }
 
         var bearer = await GetBearerTokenAsync(ct);
@@ -143,6 +145,14 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
         throw new InvalidOperationException($"Could not extract resource group from resource ID: {resourceId}");
     }
 
+    private static string BuildWorkflowBaseUrl(string subscriptionId, string resourceGroup, string appName, string workflowName)
+    {
+        return $"{ArmBase}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resourceGroups/{Uri.EscapeDataString(resourceGroup)}" +
+               $"/providers/Microsoft.Web/sites/{Uri.EscapeDataString(appName)}" +
+               $"/hostruntime/runtime/webhooks/workflow/api/management" +
+               $"/workflows/{Uri.EscapeDataString(workflowName)}";
+    }
+
     public IAsyncEnumerable<WorkflowRun> ListRunsAsync(
         string subscriptionId,
         string resourceGroup,
@@ -152,10 +162,8 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
         DateTimeOffset? end,
         CancellationToken ct = default)
     {
-        var url = $"{ArmBase}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resourceGroups/{Uri.EscapeDataString(resourceGroup)}" +
-                  $"/providers/Microsoft.Web/sites/{Uri.EscapeDataString(appName)}" +
-                  $"/hostruntime/runtime/webhooks/workflow/api/management" +
-                  $"/workflows/{Uri.EscapeDataString(workflowName)}/runs?api-version=2018-11-01";
+        var baseUrl = BuildWorkflowBaseUrl(subscriptionId, resourceGroup, appName, workflowName);
+        var url = $"{baseUrl}/runs?api-version=2018-11-01";
 
         var filters = new List<string>();
         if (start.HasValue) filters.Add($"StartTime ge {start.Value.UtcDateTime:O}");
@@ -174,10 +182,8 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
         string runName,
         CancellationToken ct = default)
     {
-        var url = $"{ArmBase}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resourceGroups/{Uri.EscapeDataString(resourceGroup)}" +
-                  $"/providers/Microsoft.Web/sites/{Uri.EscapeDataString(appName)}" +
-                  $"/hostruntime/runtime/webhooks/workflow/api/management" +
-                  $"/workflows/{Uri.EscapeDataString(workflowName)}/runs/{Uri.EscapeDataString(runName)}/actions?api-version=2018-11-01";
+        var baseUrl = BuildWorkflowBaseUrl(subscriptionId, resourceGroup, appName, workflowName);
+        var url = $"{baseUrl}/runs/{Uri.EscapeDataString(runName)}/actions?api-version=2018-11-01";
 
         return GetPaginatedAsync<ActionListResponse, WorkflowAction>(url, ct);
     }
@@ -194,7 +200,9 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
         if (string.IsNullOrEmpty(link.Uri)) return null;
         if (link.ContentSize > MaxInputSizeBytes) return null;
 
-        if (!Uri.TryCreate(link.Uri, UriKind.Absolute, out var parsedUri) || !IsAllowedHost(parsedUri.Host))
+        if (!Uri.TryCreate(link.Uri, UriKind.Absolute, out var parsedUri) ||
+            parsedUri.Scheme != Uri.UriSchemeHttps ||
+            !IsAllowedHost(parsedUri.Host))
         {
             return null;
         }
