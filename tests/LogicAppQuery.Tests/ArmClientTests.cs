@@ -196,6 +196,22 @@ public class ArmClientTests
     }
 
     [Fact]
+    public async Task FetchContentAsync_HttpScheme_ReturnsNullAndMakesNoRequests()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("http://management.azure.com/some/path", 100);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Null(result);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
     public async Task FetchContentAsync_AllowedStorageDomain_MakesRequest()
     {
         // Arrange
