@@ -9,6 +9,29 @@ namespace LogicAppQuery.Tests;
 
 public class SearchCommandTests
 {
+    private class ExceptionThrowingFetchArmClient : IArmClient
+    {
+        public Task<string> DiscoverResourceGroupAsync(string subscriptionId, string appName, CancellationToken ct)
+        {
+            return Task.FromResult("rg");
+        }
+
+        public async IAsyncEnumerable<WorkflowRun> ListRunsAsync(string subscriptionId, string resourceGroup, string appName, string workflowName, DateTimeOffset? start, DateTimeOffset? end, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            yield break;
+        }
+
+        public async IAsyncEnumerable<WorkflowAction> ListActionsAsync(string subscriptionId, string resourceGroup, string appName, string workflowName, string runName, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            yield break;
+        }
+
+        public Task<string?> FetchContentAsync(ContentLink link, CancellationToken ct)
+        {
+            throw new Exception("Simulated fetch failure");
+        }
+    }
+
     private class FakeFailingArmClient : IArmClient
     {
         public Task<string> DiscoverResourceGroupAsync(string subscriptionId, string appName, CancellationToken ct)
@@ -90,6 +113,34 @@ public class SearchCommandTests
                 }
             }
         }
+    }
+
+    [Fact]
+    public async Task BuildRunContentAsync_FetchContentThrows_WritesWarningAndReturnsInlinedContent()
+    {
+        // Arrange
+        var fakeClient = new ExceptionThrowingFetchArmClient();
+        var testConsole = new TestConsole();
+        testConsole.Profile.Capabilities.Interactive = false;
+        var command = new SearchCommand(fakeClient, ansiConsole: testConsole);
+
+        var inlinedContent = System.Text.Json.JsonDocument.Parse("{\"key\":\"value\"}").RootElement;
+
+        var run = new WorkflowRun("run1", new WorkflowRunProperties(
+            Status: "Succeeded",
+            StartTime: DateTimeOffset.UtcNow,
+            Trigger: new WorkflowRunTrigger(new ContentLink("http://example.com/trigger", 100), inlinedContent)
+        ));
+
+        // Act
+        var result = await command.BuildRunContentAsync(
+            run, "subId", "rg", "appName", "workflowName", CancellationToken.None);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal("{\"key\":\"value\"}", result);
+        Assert.Contains("Failed to fetch content link", testConsole.Output);
+        Assert.Contains("Simulated fetch failure", testConsole.Output);
     }
 
     [Fact]

@@ -104,13 +104,13 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
 
                     lock (_consoleLock) // prevent concurrent console writes from overlapping
                     {
-                        AnsiConsole.MarkupLine(
+                        _console.MarkupLine(
                             $"[bold green]MATCH[/]  " +
                             $"[grey]{run.Properties.StartTime.UtcDateTime:yyyy-MM-dd HH:mm:ss}[/]  " +
                             $"[{statusColor}]{Markup.Escape(run.Properties.Status)}[/]  " +
                             $"[dim]{Markup.Escape(run.Name)}[/]");
-                        AnsiConsole.MarkupLine($"  [dim italic]{Markup.Escape(snippet)}[/]");
-                        AnsiConsole.WriteLine();
+                        _console.MarkupLine($"  [dim italic]{Markup.Escape(snippet)}[/]");
+                        _console.WriteLine();
                     }
                 });
             });
@@ -195,7 +195,10 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
             }
             catch (Exception ex)
             {
-                AnsiConsole.MarkupLine($"[yellow]Warning:[/] Failed to fetch content link ({Markup.Escape(ex.Message)}). Falling back to inlined content.");
+                lock (_consoleLock)
+                {
+                    _console.MarkupLine($"[yellow]Warning:[/] Failed to fetch content link ({Markup.Escape(ex.Message)}). Falling back to inlined content.");
+                }
             }
         }
 
