@@ -145,6 +145,14 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
         throw new InvalidOperationException($"Could not extract resource group from resource ID: {resourceId}");
     }
 
+    private static string BuildWorkflowBaseUrl(string subscriptionId, string resourceGroup, string appName, string workflowName)
+    {
+        return $"{ArmBase}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resourceGroups/{Uri.EscapeDataString(resourceGroup)}" +
+               $"/providers/Microsoft.Web/sites/{Uri.EscapeDataString(appName)}" +
+               $"/hostruntime/runtime/webhooks/workflow/api/management" +
+               $"/workflows/{Uri.EscapeDataString(workflowName)}";
+    }
+
     public IAsyncEnumerable<WorkflowRun> ListRunsAsync(
         string subscriptionId,
         string resourceGroup,
@@ -154,10 +162,8 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
         DateTimeOffset? end,
         CancellationToken ct = default)
     {
-        var url = $"{ArmBase}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resourceGroups/{Uri.EscapeDataString(resourceGroup)}" +
-                  $"/providers/Microsoft.Web/sites/{Uri.EscapeDataString(appName)}" +
-                  $"/hostruntime/runtime/webhooks/workflow/api/management" +
-                  $"/workflows/{Uri.EscapeDataString(workflowName)}/runs?api-version=2018-11-01";
+        var baseUrl = BuildWorkflowBaseUrl(subscriptionId, resourceGroup, appName, workflowName);
+        var url = $"{baseUrl}/runs?api-version=2018-11-01";
 
         var filters = new List<string>();
         if (start.HasValue) filters.Add($"StartTime ge {start.Value.UtcDateTime:O}");
@@ -176,10 +182,8 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
         string runName,
         CancellationToken ct = default)
     {
-        var url = $"{ArmBase}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resourceGroups/{Uri.EscapeDataString(resourceGroup)}" +
-                  $"/providers/Microsoft.Web/sites/{Uri.EscapeDataString(appName)}" +
-                  $"/hostruntime/runtime/webhooks/workflow/api/management" +
-                  $"/workflows/{Uri.EscapeDataString(workflowName)}/runs/{Uri.EscapeDataString(runName)}/actions?api-version=2018-11-01";
+        var baseUrl = BuildWorkflowBaseUrl(subscriptionId, resourceGroup, appName, workflowName);
+        var url = $"{baseUrl}/runs/{Uri.EscapeDataString(runName)}/actions?api-version=2018-11-01";
 
         return GetPaginatedAsync<ActionListResponse, WorkflowAction>(url, ct);
     }
