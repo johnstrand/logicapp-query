@@ -113,7 +113,7 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
                     run.Properties.Status, run.Properties.StartTime, content));
         }
 
-        if (!content.Contains(state.SearchTerm, StringComparison.OrdinalIgnoreCase))
+        if (!content.AsSpan().Contains(state.SearchTerm.AsSpan(), StringComparison.OrdinalIgnoreCase))
             return;
 
         Interlocked.Increment(ref state.MatchCount);
@@ -243,8 +243,8 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
         var raw    = content[start..end].ReplaceLineEndings(" ");
         var prefix = start > 0 ? "..." : "";
         var suffix = end < content.Length ? "..." : "";
-        var snippet = prefix + raw + suffix;
-        return snippet.Length > MaxSnippetLength ? snippet[..MaxSnippetLength] + "..." : snippet;
+        var snippet = $"{prefix}{raw}{suffix}";
+        return snippet.Length > MaxSnippetLength ? $"{snippet.AsSpan(0, MaxSnippetLength)}..." : snippet;
     }
 }
 
