@@ -55,7 +55,6 @@ internal record WorkflowAction(
 );
 
 internal record WorkflowActionProperties(
-    [property: JsonPropertyName("status")] string? Status,
     [property: JsonPropertyName("inputsLink")] ContentLink? InputsLink,
     [property: JsonPropertyName("outputsLink")] ContentLink? OutputsLink,
     [property: JsonPropertyName("inputs")] System.Text.Json.JsonElement? Inputs,

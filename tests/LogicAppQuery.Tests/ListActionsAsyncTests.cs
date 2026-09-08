@@ -54,8 +54,8 @@ public class ListActionsAsyncTests
         var responseContent = JsonSerializer.Serialize(new ActionListResponse(
             new List<WorkflowAction>
             {
-                new("action1", new WorkflowActionProperties("Succeeded", null, null, null, null)),
-                new("action2", new WorkflowActionProperties("Failed", null, null, null, null))
+                new("action1", new WorkflowActionProperties(null, null, null, null)),
+                new("action2", new WorkflowActionProperties(null, null, null, null))
             },
             null
         ));
