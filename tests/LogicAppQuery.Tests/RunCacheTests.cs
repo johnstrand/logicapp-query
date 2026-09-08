@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Security.Cryptography;
 using System.Threading.Tasks;
 using LogicAppQuery;
 using Xunit;
@@ -230,10 +231,21 @@ public class RunCacheTests
         // We ensure that protecting and then unprotecting returns the original text.
         var unprotectedContent = RunCache.UnprotectContent(protectedContent);
         Assert.Equal(input, unprotectedContent);
+    }
 
-        // Verify handling of plaintext/legacy unencrypted data in UnprotectContent
-        var unencryptedLegacy = "{\"key\":\"value\"}";
-        var handledLegacy = RunCache.UnprotectContent(unencryptedLegacy);
-        Assert.Equal(unencryptedLegacy, handledLegacy);
+    [Fact]
+    public void UnprotectContent_InvalidContent_ThrowsCryptographicExceptionOnWindows()
+    {
+        var invalidContent = "not_valid_base64_or_encrypted_data!";
+
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Throws<CryptographicException>(() => RunCache.UnprotectContent(invalidContent));
+        }
+        else
+        {
+            // On non-Windows, DPAPI is skipped and returns raw text.
+            Assert.Equal(invalidContent, RunCache.UnprotectContent(invalidContent));
+        }
     }
 }
