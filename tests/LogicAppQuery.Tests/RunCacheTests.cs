@@ -236,4 +236,26 @@ public class RunCacheTests
         var handledLegacy = RunCache.UnprotectContent(unencryptedLegacy);
         Assert.Equal(unencryptedLegacy, handledLegacy);
     }
+
+    [Fact]
+    public async Task DisposeAsync_DisposesUnderlyingConnection()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            var cache = await RunCache.LoadAsync("testApp", "testWorkflow", tempDir);
+
+            // Call DisposeAsync on RunCache
+            await cache.DisposeAsync();
+
+            // Verify that accessing the cache after disposal throws InvalidOperationException or ObjectDisposedException
+            await Assert.ThrowsAsync<InvalidOperationException>(() => cache.TryGetAsync("testRun"));
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
 }
