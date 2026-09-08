@@ -171,7 +171,9 @@ public class SearchCommandTests
     {
         // Arrange
         var fakeClient = new FakeFailingArmClient();
-        var command = new SearchCommand(fakeClient);
+        var testConsole = new TestConsole();
+        testConsole.Profile.Capabilities.Interactive = false;
+        var command = new SearchCommand(fakeClient, ansiConsole: testConsole);
 
         // Act & Assert
         // We expect it to write the error to console and return without throwing
@@ -179,6 +181,9 @@ public class SearchCommandTests
             "subId", "appName", "workflowName", "search", null, null, CancellationToken.None));
 
         Assert.Null(ex); // Ensures it returns gracefully and doesn't crash
+        Assert.Contains("failed", testConsole.Output);
+        Assert.Contains("Error:", testConsole.Output);
+        Assert.Contains("Simulated discovery failure", testConsole.Output);
     }
 
     [Fact]
