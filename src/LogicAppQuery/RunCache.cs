@@ -81,8 +81,12 @@ internal sealed class RunCache : IAsyncDisposable
         {
             try
             {
-                var json = await File.ReadAllTextAsync(legacyFilePath);
-                var dict = JsonSerializer.Deserialize<Dictionary<string, CachedRun>>(json);
+                Dictionary<string, CachedRun>? dict;
+                await using (var stream = File.OpenRead(legacyFilePath))
+                {
+                    dict = await JsonSerializer.DeserializeAsync<Dictionary<string, CachedRun>>(stream);
+                }
+
                 if (dict is not null && dict.Count > 0)
                 {
                     using var transaction = connection.BeginTransaction();
