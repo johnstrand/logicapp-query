@@ -131,6 +131,13 @@ internal sealed class RunCache : IAsyncDisposable
 
     private readonly System.Threading.SemaphoreSlim _dbLock = new(1, 1);
 
+    private void AddPrimaryKeyParameters(SqliteCommand command, string runName)
+    {
+        command.Parameters.AddWithValue("$AppName", _appName);
+        command.Parameters.AddWithValue("$WorkflowName", _workflowName);
+        command.Parameters.AddWithValue("$RunName", runName);
+    }
+
     public async Task<CachedRun?> TryGetAsync(string runName)
     {
         await _dbLock.WaitAsync();
@@ -142,9 +149,7 @@ internal sealed class RunCache : IAsyncDisposable
             FROM Runs
             WHERE AppName = $AppName AND WorkflowName = $WorkflowName AND RunName = $RunName;
         ";
-        command.Parameters.AddWithValue("$AppName", _appName);
-        command.Parameters.AddWithValue("$WorkflowName", _workflowName);
-        command.Parameters.AddWithValue("$RunName", runName);
+        AddPrimaryKeyParameters(command, runName);
 
         using var reader = await command.ExecuteReaderAsync();
         if (await reader.ReadAsync())
@@ -177,9 +182,7 @@ internal sealed class RunCache : IAsyncDisposable
             INSERT OR REPLACE INTO Runs (AppName, WorkflowName, RunName, Status, StartTime, Content)
             VALUES ($AppName, $WorkflowName, $RunName, $Status, $StartTime, $Content);
         ";
-        command.Parameters.AddWithValue("$AppName", _appName);
-        command.Parameters.AddWithValue("$WorkflowName", _workflowName);
-        command.Parameters.AddWithValue("$RunName", runName);
+        AddPrimaryKeyParameters(command, runName);
         command.Parameters.AddWithValue("$Status", run.Status);
         command.Parameters.AddWithValue("$StartTime", run.StartTime.ToString("o"));
         command.Parameters.AddWithValue("$Content", ProtectContent(run.Content));
