@@ -243,11 +243,26 @@ internal sealed class RunCache : IAsyncDisposable
         return _connection.DisposeAsync();
     }
 
+    private static readonly System.Buffers.SearchValues<char> InvalidFileNameSearchValues =
+        System.Buffers.SearchValues.Create(
+            Path.GetInvalidFileNameChars().Concat(new[] { '.', '/', '\\' }).Distinct().ToArray());
+
     internal static string Sanitize(string name)
     {
         if (name == null) throw new ArgumentNullException(nameof(name));
-        var invalid = Path.GetInvalidFileNameChars();
-        var sanitized = string.Concat(name.Select(c => invalid.Contains(c) ? '_' : c));
-        return sanitized.Replace('.', '_').Replace('/', '_').Replace('\\', '_');
+
+        if (name.AsSpan().IndexOfAny(InvalidFileNameSearchValues) < 0)
+        {
+            return name;
+        }
+
+        return string.Create(name.Length, name, (span, state) =>
+        {
+            for (int i = 0; i < state.Length; i++)
+            {
+                char c = state[i];
+                span[i] = InvalidFileNameSearchValues.Contains(c) ? '_' : c;
+            }
+        });
     }
 }
