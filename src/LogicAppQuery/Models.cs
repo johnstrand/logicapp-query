@@ -50,12 +50,10 @@ internal record ActionListResponse(
 ) : IPageableResponse<WorkflowAction>;
 
 internal record WorkflowAction(
-    [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("properties")] WorkflowActionProperties Properties
 );
 
 internal record WorkflowActionProperties(
-    [property: JsonPropertyName("status")] string? Status,
     [property: JsonPropertyName("inputsLink")] ContentLink? InputsLink,
     [property: JsonPropertyName("outputsLink")] ContentLink? OutputsLink,
     [property: JsonPropertyName("inputs")] System.Text.Json.JsonElement? Inputs,
