@@ -78,7 +78,6 @@ public class SearchCommandTests
             for (int i = 0; i < _actionCount; i++)
             {
                 var action = new WorkflowAction(new WorkflowActionProperties(
-                    Status: "Succeeded",
                     InputsLink: new ContentLink($"http://example.com/input{i}", 100),
                     OutputsLink: new ContentLink($"http://example.com/output{i}", 100),
                     Inputs: null,
@@ -310,7 +309,7 @@ public class SearchCommandTests
         {
             if (runName == "run1")
             {
-                yield return new WorkflowAction(new WorkflowActionProperties("Succeeded", new ContentLink("http://test/input", 10), null, null, null));
+                yield return new WorkflowAction(new WorkflowActionProperties(new ContentLink("http://test/input", 10), null, null, null));
             }
             await Task.CompletedTask;
         }
