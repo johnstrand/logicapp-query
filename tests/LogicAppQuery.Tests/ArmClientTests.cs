@@ -903,4 +903,32 @@ public class ArmClientTests
         Assert.Contains(Uri.EscapeDataString(workflowName), requestUri);
         Assert.Contains(Uri.EscapeDataString(runName), requestUri);
     }
+
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_401Unauthorized_ThrowsUnauthorizedAccessException()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized));
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None));
+
+        Assert.Contains("Authentication failed (401) calling ARM API", ex.Message);
+        Assert.Contains("Ensure you are logged in with 'az login'", ex.Message);
+    }
+
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_403Forbidden_ThrowsUnauthorizedAccessException()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.Forbidden));
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None));
+
+        Assert.Contains("Access denied (403) calling ARM API", ex.Message);
+        Assert.Contains("Ensure your account has at least Reader role", ex.Message);
+    }
 }
