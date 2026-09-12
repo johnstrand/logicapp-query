@@ -460,6 +460,27 @@ public class ArmClientTests
         Assert.Equal(3, handler.Requests.Count); // 3 attempts made
     }
 
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_NoAppFound_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"value":[]}""")
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var subscriptionId = "sub-id";
+        var appName = "non-existent-app";
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.DiscoverResourceGroupAsync(subscriptionId, appName, CancellationToken.None));
+
+        var expectedMessage = $"No site named '{appName}' found in subscription '{subscriptionId}'. Verify the app name and that your account has access.";
+        Assert.Equal(expectedMessage, ex.Message);
+        Assert.Equal(3, handler.Requests.Count);
+    }
+
     private class FakeTokenCredential : Azure.Core.TokenCredential
     {
         public override Azure.Core.AccessToken GetToken(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
