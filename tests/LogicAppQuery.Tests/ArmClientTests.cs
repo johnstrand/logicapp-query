@@ -780,8 +780,6 @@ public class ArmClientTests
 
         // Assert
         Assert.Equal(2, actions.Count);
-        Assert.Equal("Succeeded", actions[0].Properties.Status);
-        Assert.Equal("Failed", actions[1].Properties.Status);
         Assert.Equal(2, handler.Requests.Count);
     }
 

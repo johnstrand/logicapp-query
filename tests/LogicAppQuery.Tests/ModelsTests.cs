@@ -41,7 +41,7 @@ public class ModelsTests
     [Fact]
     public void WorkflowAction_ConstructorAndProperties()
     {
-        var props = new WorkflowActionProperties("Succeeded", null, null, null, null);
+        var props = new WorkflowActionProperties(null, null, null, null);
         var action = new WorkflowAction(props);
 
         Assert.Same(props, action.Properties);
@@ -55,9 +55,8 @@ public class ModelsTests
         var inputs = JsonDocument.Parse("{\"in\":\"val\"}").RootElement;
         var outputs = JsonDocument.Parse("{\"out\":\"val\"}").RootElement;
 
-        var props = new WorkflowActionProperties("Failed", inputsLink, outputsLink, inputs, outputs);
+        var props = new WorkflowActionProperties(inputsLink, outputsLink, inputs, outputs);
 
-        Assert.Equal("Failed", props.Status);
         Assert.Same(inputsLink, props.InputsLink);
         Assert.Same(outputsLink, props.OutputsLink);
         Assert.Equal(inputs.GetRawText(), props.Inputs?.GetRawText());
