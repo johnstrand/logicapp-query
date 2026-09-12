@@ -9,11 +9,61 @@ namespace LogicAppQuery.Tests;
 public class ModelsTests
 {
     [Fact]
+    public void ResourceListResponse_ConstructorAndProperties()
+    {
+        var items = new List<ResourceItem> { new("id1", "kind1") };
+        var response = new ResourceListResponse(items, "nextLinkUrl");
+
+        Assert.Same(items, response.Value);
+        Assert.Equal("nextLinkUrl", response.NextLink);
+    }
+
+    [Fact]
     public void ResourceItem_ConstructorAndProperties()
     {
         var item = new ResourceItem("someId", "someKind");
         Assert.Equal("someId", item.Id);
         Assert.Equal("someKind", item.Kind);
+    }
+
+    [Fact]
+    public void RunsListResponse_ConstructorAndProperties()
+    {
+        var runs = new List<WorkflowRun>();
+        var response = new RunsListResponse(runs, "nextRunLink");
+
+        Assert.Same(runs, response.Value);
+        Assert.Equal("nextRunLink", response.NextLink);
+    }
+
+    [Fact]
+    public void WorkflowRun_ConstructorAndProperties()
+    {
+        var props = new WorkflowRunProperties("Succeeded", DateTimeOffset.UtcNow, null);
+        var run = new WorkflowRun("run1", props);
+
+        Assert.Equal("run1", run.Name);
+        Assert.Same(props, run.Properties);
+    }
+
+    [Fact]
+    public void WorkflowRunTrigger_ConstructorAndProperties()
+    {
+        var contentLink = new ContentLink("https://example.com/trigger", 100);
+        var outputs = JsonDocument.Parse("{\"trig\":\"val\"}").RootElement;
+        var trigger = new WorkflowRunTrigger(contentLink, outputs);
+
+        Assert.Same(contentLink, trigger.OutputsLink);
+        Assert.Equal(outputs.GetRawText(), trigger.Outputs?.GetRawText());
+    }
+
+    [Fact]
+    public void ContentLink_ConstructorAndProperties()
+    {
+        var link = new ContentLink("https://example.com", 256);
+
+        Assert.Equal("https://example.com", link.Uri);
+        Assert.Equal(256, link.ContentSize);
     }
 
     [Fact]
@@ -41,10 +91,9 @@ public class ModelsTests
     [Fact]
     public void WorkflowAction_ConstructorAndProperties()
     {
-        var props = new WorkflowActionProperties("Succeeded", null, null, null, null);
-        var action = new WorkflowAction("actionName", props);
+        var props = new WorkflowActionProperties(null, null, null, null);
+        var action = new WorkflowAction(props);
 
-        Assert.Equal("actionName", action.Name);
         Assert.Same(props, action.Properties);
     }
 
@@ -56,9 +105,8 @@ public class ModelsTests
         var inputs = JsonDocument.Parse("{\"in\":\"val\"}").RootElement;
         var outputs = JsonDocument.Parse("{\"out\":\"val\"}").RootElement;
 
-        var props = new WorkflowActionProperties("Failed", inputsLink, outputsLink, inputs, outputs);
+        var props = new WorkflowActionProperties(inputsLink, outputsLink, inputs, outputs);
 
-        Assert.Equal("Failed", props.Status);
         Assert.Same(inputsLink, props.InputsLink);
         Assert.Same(outputsLink, props.OutputsLink);
         Assert.Equal(inputs.GetRawText(), props.Inputs?.GetRawText());

@@ -84,8 +84,12 @@ internal sealed class RunCache : IAsyncDisposable
 
         try
         {
-            var json = await File.ReadAllTextAsync(legacyFilePath);
-            var dict = JsonSerializer.Deserialize<Dictionary<string, CachedRun>>(json);
+            Dictionary<string, CachedRun>? dict;
+            await using (var stream = File.OpenRead(legacyFilePath))
+            {
+                dict = await JsonSerializer.DeserializeAsync<Dictionary<string, CachedRun>>(stream);
+            }
+
             if (dict is not null && dict.Count > 0)
             {
                 await MigrateDictionaryAsync(connection, appName, workflowName, dict);
@@ -146,6 +150,13 @@ internal sealed class RunCache : IAsyncDisposable
 
     private readonly System.Threading.SemaphoreSlim _dbLock = new(1, 1);
 
+    private void AddPrimaryKeyParameters(SqliteCommand command, string runName)
+    {
+        command.Parameters.AddWithValue("$AppName", _appName);
+        command.Parameters.AddWithValue("$WorkflowName", _workflowName);
+        command.Parameters.AddWithValue("$RunName", runName);
+    }
+
     public async Task<CachedRun?> TryGetAsync(string runName)
     {
         await _dbLock.WaitAsync();
@@ -157,9 +168,7 @@ internal sealed class RunCache : IAsyncDisposable
             FROM Runs
             WHERE AppName = $AppName AND WorkflowName = $WorkflowName AND RunName = $RunName;
         ";
-        command.Parameters.AddWithValue("$AppName", _appName);
-        command.Parameters.AddWithValue("$WorkflowName", _workflowName);
-        command.Parameters.AddWithValue("$RunName", runName);
+        AddPrimaryKeyParameters(command, runName);
 
         using var reader = await command.ExecuteReaderAsync();
         if (await reader.ReadAsync())
@@ -192,9 +201,7 @@ internal sealed class RunCache : IAsyncDisposable
             INSERT OR REPLACE INTO Runs (AppName, WorkflowName, RunName, Status, StartTime, Content)
             VALUES ($AppName, $WorkflowName, $RunName, $Status, $StartTime, $Content);
         ";
-        command.Parameters.AddWithValue("$AppName", _appName);
-        command.Parameters.AddWithValue("$WorkflowName", _workflowName);
-        command.Parameters.AddWithValue("$RunName", runName);
+        AddPrimaryKeyParameters(command, runName);
         command.Parameters.AddWithValue("$Status", run.Status);
         command.Parameters.AddWithValue("$StartTime", run.StartTime.ToString("o"));
         command.Parameters.AddWithValue("$Content", ProtectContent(run.Content));
@@ -214,16 +221,9 @@ internal sealed class RunCache : IAsyncDisposable
         if (!OperatingSystem.IsWindows())
             return content;
 
-        try
-        {
-            var plainBytes = Encoding.UTF8.GetBytes(content);
-            var protectedBytes = ProtectedData.Protect(plainBytes, null, DataProtectionScope.CurrentUser);
-            return Convert.ToBase64String(protectedBytes);
-        }
-        catch (PlatformNotSupportedException)
-        {
-            return content;
-        }
+        var plainBytes = Encoding.UTF8.GetBytes(content);
+        var protectedBytes = ProtectedData.Protect(plainBytes, null, DataProtectionScope.CurrentUser);
+        return Convert.ToBase64String(protectedBytes);
     }
 
     internal static string UnprotectContent(string content)
@@ -239,17 +239,9 @@ internal sealed class RunCache : IAsyncDisposable
             var plainBytes = ProtectedData.Unprotect(protectedBytes, null, DataProtectionScope.CurrentUser);
             return Encoding.UTF8.GetString(plainBytes);
         }
-        catch (PlatformNotSupportedException)
+        catch (FormatException ex)
         {
-            return content;
-        }
-        catch (CryptographicException)
-        {
-            return content;
-        }
-        catch (FormatException)
-        {
-            return content;
+            throw new CryptographicException("Failed to unprotect content due to invalid format.", ex);
         }
     }
 
@@ -258,11 +250,26 @@ internal sealed class RunCache : IAsyncDisposable
         return _connection.DisposeAsync();
     }
 
+    private static readonly System.Buffers.SearchValues<char> InvalidFileNameSearchValues =
+        System.Buffers.SearchValues.Create(
+            Path.GetInvalidFileNameChars().Concat(new[] { '.', '/', '\\' }).Distinct().ToArray());
+
     internal static string Sanitize(string name)
     {
         if (name == null) throw new ArgumentNullException(nameof(name));
-        var invalid = Path.GetInvalidFileNameChars();
-        var sanitized = string.Concat(name.Select(c => invalid.Contains(c) ? '_' : c));
-        return sanitized.Replace('.', '_').Replace('/', '_').Replace('\\', '_');
+
+        if (name.AsSpan().IndexOfAny(InvalidFileNameSearchValues) < 0)
+        {
+            return name;
+        }
+
+        return string.Create(name.Length, name, (span, state) =>
+        {
+            for (int i = 0; i < state.Length; i++)
+            {
+                char c = state[i];
+                span[i] = InvalidFileNameSearchValues.Contains(c) ? '_' : c;
+            }
+        });
     }
 }
