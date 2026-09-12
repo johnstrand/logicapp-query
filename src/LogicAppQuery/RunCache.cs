@@ -206,16 +206,9 @@ internal sealed class RunCache : IAsyncDisposable
         if (!OperatingSystem.IsWindows())
             return content;
 
-        try
-        {
-            var plainBytes = Encoding.UTF8.GetBytes(content);
-            var protectedBytes = ProtectedData.Protect(plainBytes, null, DataProtectionScope.CurrentUser);
-            return Convert.ToBase64String(protectedBytes);
-        }
-        catch (PlatformNotSupportedException)
-        {
-            return content;
-        }
+        var plainBytes = Encoding.UTF8.GetBytes(content);
+        var protectedBytes = ProtectedData.Protect(plainBytes, null, DataProtectionScope.CurrentUser);
+        return Convert.ToBase64String(protectedBytes);
     }
 
     internal static string UnprotectContent(string content)
@@ -231,17 +224,9 @@ internal sealed class RunCache : IAsyncDisposable
             var plainBytes = ProtectedData.Unprotect(protectedBytes, null, DataProtectionScope.CurrentUser);
             return Encoding.UTF8.GetString(plainBytes);
         }
-        catch (PlatformNotSupportedException)
+        catch (FormatException ex)
         {
-            return content;
-        }
-        catch (CryptographicException)
-        {
-            return content;
-        }
-        catch (FormatException)
-        {
-            return content;
+            throw new CryptographicException("Failed to unprotect content due to invalid format.", ex);
         }
     }
 
