@@ -77,59 +77,85 @@ internal sealed class RunCache : IAsyncDisposable
         var fileName = Sanitize(appName) + "-" + Sanitize(workflowName) + ".cache.json";
         var legacyFilePath = Path.Combine(dir, fileName);
 
-        if (File.Exists(legacyFilePath))
+        if (!File.Exists(legacyFilePath))
         {
-            try
+            return;
+        }
+
+        try
+        {
+            Dictionary<string, CachedRun>? dict;
+            await using (var stream = File.OpenRead(legacyFilePath))
             {
-                var json = await File.ReadAllTextAsync(legacyFilePath);
-                var dict = JsonSerializer.Deserialize<Dictionary<string, CachedRun>>(json);
-                if (dict is not null && dict.Count > 0)
-                {
-                    using var transaction = connection.BeginTransaction();
-
-                    using (var command = connection.CreateCommand())
-                    {
-                        command.Transaction = transaction;
-                        command.CommandText = @"
-                            INSERT OR IGNORE INTO Runs (AppName, WorkflowName, RunName, Status, StartTime, Content)
-                            VALUES ($AppName, $WorkflowName, $RunName, $Status, $StartTime, $Content);
-                        ";
-
-                        var appNameParam = command.Parameters.Add("$AppName", SqliteType.Text);
-                        var workflowNameParam = command.Parameters.Add("$WorkflowName", SqliteType.Text);
-                        var runNameParam = command.Parameters.Add("$RunName", SqliteType.Text);
-                        var statusParam = command.Parameters.Add("$Status", SqliteType.Text);
-                        var startTimeParam = command.Parameters.Add("$StartTime", SqliteType.Text);
-                        var contentParam = command.Parameters.Add("$Content", SqliteType.Text);
-
-                        appNameParam.Value = appName;
-                        workflowNameParam.Value = workflowName;
-
-                        command.Prepare();
-
-                        foreach (var kvp in dict)
-                        {
-                            runNameParam.Value = kvp.Key;
-                            statusParam.Value = kvp.Value.Status;
-                            startTimeParam.Value = kvp.Value.StartTime.ToString("o"); // ISO 8601
-                            contentParam.Value = ProtectContent(kvp.Value.Content);
-                            await command.ExecuteNonQueryAsync();
-                        }
-                    }
-
-                    transaction.Commit();
-                }
-
-                File.Delete(legacyFilePath);
+                dict = await JsonSerializer.DeserializeAsync<Dictionary<string, CachedRun>>(stream);
             }
-            catch (Exception ex)
+
+            if (dict is not null && dict.Count > 0)
             {
-                AnsiConsole.MarkupLine($"[yellow]Warning:[/] Could not migrate legacy cache file. Starting fresh for this app/workflow. ({Markup.Escape(ex.Message)})");
+                await MigrateDictionaryAsync(connection, appName, workflowName, dict);
             }
+
+            File.Delete(legacyFilePath);
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[yellow]Warning:[/] Could not migrate legacy cache file. Starting fresh for this app/workflow. ({Markup.Escape(ex.Message)})");
         }
     }
 
+    private static async Task MigrateDictionaryAsync(
+        SqliteConnection connection,
+        string appName,
+        string workflowName,
+        Dictionary<string, CachedRun> dict)
+    {
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = @"
+            INSERT OR IGNORE INTO Runs (AppName, WorkflowName, RunName, Status, StartTime, Content)
+            VALUES ($AppName, $WorkflowName, $RunName, $Status, $StartTime, $Content);
+        ";
+
+        var (runNameParam, statusParam, startTimeParam, contentParam) = CreateMigrationParameters(command, appName, workflowName);
+        command.Prepare();
+
+        foreach (var (runName, run) in dict)
+        {
+            runNameParam.Value = runName;
+            statusParam.Value = run.Status;
+            startTimeParam.Value = run.StartTime.ToString("o"); // ISO 8601
+            contentParam.Value = ProtectContent(run.Content);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        transaction.Commit();
+    }
+
+    private static (SqliteParameter RunName, SqliteParameter Status, SqliteParameter StartTime, SqliteParameter Content)
+        CreateMigrationParameters(SqliteCommand command, string appName, string workflowName)
+    {
+        var appNameParam = command.Parameters.Add("$AppName", SqliteType.Text);
+        var workflowNameParam = command.Parameters.Add("$WorkflowName", SqliteType.Text);
+        var runNameParam = command.Parameters.Add("$RunName", SqliteType.Text);
+        var statusParam = command.Parameters.Add("$Status", SqliteType.Text);
+        var startTimeParam = command.Parameters.Add("$StartTime", SqliteType.Text);
+        var contentParam = command.Parameters.Add("$Content", SqliteType.Text);
+
+        appNameParam.Value = appName;
+        workflowNameParam.Value = workflowName;
+
+        return (runNameParam, statusParam, startTimeParam, contentParam);
+    }
+
     private readonly System.Threading.SemaphoreSlim _dbLock = new(1, 1);
+
+    private void AddPrimaryKeyParameters(SqliteCommand command, string runName)
+    {
+        command.Parameters.AddWithValue("$AppName", _appName);
+        command.Parameters.AddWithValue("$WorkflowName", _workflowName);
+        command.Parameters.AddWithValue("$RunName", runName);
+    }
 
     public async Task<CachedRun?> TryGetAsync(string runName)
     {
@@ -142,9 +168,7 @@ internal sealed class RunCache : IAsyncDisposable
             FROM Runs
             WHERE AppName = $AppName AND WorkflowName = $WorkflowName AND RunName = $RunName;
         ";
-        command.Parameters.AddWithValue("$AppName", _appName);
-        command.Parameters.AddWithValue("$WorkflowName", _workflowName);
-        command.Parameters.AddWithValue("$RunName", runName);
+        AddPrimaryKeyParameters(command, runName);
 
         using var reader = await command.ExecuteReaderAsync();
         if (await reader.ReadAsync())
@@ -177,9 +201,7 @@ internal sealed class RunCache : IAsyncDisposable
             INSERT OR REPLACE INTO Runs (AppName, WorkflowName, RunName, Status, StartTime, Content)
             VALUES ($AppName, $WorkflowName, $RunName, $Status, $StartTime, $Content);
         ";
-        command.Parameters.AddWithValue("$AppName", _appName);
-        command.Parameters.AddWithValue("$WorkflowName", _workflowName);
-        command.Parameters.AddWithValue("$RunName", runName);
+        AddPrimaryKeyParameters(command, runName);
         command.Parameters.AddWithValue("$Status", run.Status);
         command.Parameters.AddWithValue("$StartTime", run.StartTime.ToString("o"));
         command.Parameters.AddWithValue("$Content", ProtectContent(run.Content));
@@ -199,16 +221,9 @@ internal sealed class RunCache : IAsyncDisposable
         if (!OperatingSystem.IsWindows())
             return content;
 
-        try
-        {
-            var plainBytes = Encoding.UTF8.GetBytes(content);
-            var protectedBytes = ProtectedData.Protect(plainBytes, null, DataProtectionScope.CurrentUser);
-            return Convert.ToBase64String(protectedBytes);
-        }
-        catch (PlatformNotSupportedException)
-        {
-            return content;
-        }
+        var plainBytes = Encoding.UTF8.GetBytes(content);
+        var protectedBytes = ProtectedData.Protect(plainBytes, null, DataProtectionScope.CurrentUser);
+        return Convert.ToBase64String(protectedBytes);
     }
 
     internal static string UnprotectContent(string content)
@@ -224,17 +239,9 @@ internal sealed class RunCache : IAsyncDisposable
             var plainBytes = ProtectedData.Unprotect(protectedBytes, null, DataProtectionScope.CurrentUser);
             return Encoding.UTF8.GetString(plainBytes);
         }
-        catch (PlatformNotSupportedException)
+        catch (FormatException ex)
         {
-            return content;
-        }
-        catch (CryptographicException)
-        {
-            return content;
-        }
-        catch (FormatException)
-        {
-            return content;
+            throw new CryptographicException("Failed to unprotect content due to invalid format.", ex);
         }
     }
 
@@ -243,11 +250,26 @@ internal sealed class RunCache : IAsyncDisposable
         return _connection.DisposeAsync();
     }
 
+    private static readonly System.Buffers.SearchValues<char> InvalidFileNameSearchValues =
+        System.Buffers.SearchValues.Create(
+            Path.GetInvalidFileNameChars().Concat(new[] { '.', '/', '\\' }).Distinct().ToArray());
+
     internal static string Sanitize(string name)
     {
         if (name == null) throw new ArgumentNullException(nameof(name));
-        var invalid = Path.GetInvalidFileNameChars();
-        var sanitized = string.Concat(name.Select(c => invalid.Contains(c) ? '_' : c));
-        return sanitized.Replace('.', '_').Replace('/', '_').Replace('\\', '_');
+
+        if (name.AsSpan().IndexOfAny(InvalidFileNameSearchValues) < 0)
+        {
+            return name;
+        }
+
+        return string.Create(name.Length, name, (span, state) =>
+        {
+            for (int i = 0; i < state.Length; i++)
+            {
+                char c = state[i];
+                span[i] = InvalidFileNameSearchValues.Contains(c) ? '_' : c;
+            }
+        });
     }
 }
