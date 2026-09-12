@@ -832,4 +832,56 @@ public class ArmClientTests
         Assert.Contains(Uri.EscapeDataString(workflowName), requestUri);
         Assert.Contains(Uri.EscapeDataString(runName), requestUri);
     }
+
+    [Fact]
+    public async Task FetchContentAsync_BlobStorageWithoutSig_DoesNotSendBearerToken()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("https://myaccount.blob.core.windows.net/some/path", 100);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Single(handler.Requests);
+        var req = handler.Requests[0];
+        Assert.Null(req.Headers.Authorization);
+    }
+
+    [Fact]
+    public async Task FetchContentAsync_FileStorageWithoutSig_DoesNotSendBearerToken()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("https://myaccount.file.core.windows.net/some/path", 100);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Single(handler.Requests);
+        var req = handler.Requests[0];
+        Assert.Null(req.Headers.Authorization);
+    }
+
+    [Fact]
+    public async Task FetchContentAsync_DisallowedHost_ReturnsNull()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("https://evil.com/payload", 100);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Null(result);
+        Assert.Empty(handler.Requests);
+    }
 }
