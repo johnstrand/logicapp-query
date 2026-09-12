@@ -77,56 +77,71 @@ internal sealed class RunCache : IAsyncDisposable
         var fileName = Sanitize(appName) + "-" + Sanitize(workflowName) + ".cache.json";
         var legacyFilePath = Path.Combine(dir, fileName);
 
-        if (File.Exists(legacyFilePath))
+        if (!File.Exists(legacyFilePath))
         {
-            try
-            {
-                var json = await File.ReadAllTextAsync(legacyFilePath);
-                var dict = JsonSerializer.Deserialize<Dictionary<string, CachedRun>>(json);
-                if (dict is not null && dict.Count > 0)
-                {
-                    using var transaction = connection.BeginTransaction();
-
-                    using (var command = connection.CreateCommand())
-                    {
-                        command.Transaction = transaction;
-                        command.CommandText = @"
-                            INSERT OR IGNORE INTO Runs (AppName, WorkflowName, RunName, Status, StartTime, Content)
-                            VALUES ($AppName, $WorkflowName, $RunName, $Status, $StartTime, $Content);
-                        ";
-
-                        var appNameParam = command.Parameters.Add("$AppName", SqliteType.Text);
-                        var workflowNameParam = command.Parameters.Add("$WorkflowName", SqliteType.Text);
-                        var runNameParam = command.Parameters.Add("$RunName", SqliteType.Text);
-                        var statusParam = command.Parameters.Add("$Status", SqliteType.Text);
-                        var startTimeParam = command.Parameters.Add("$StartTime", SqliteType.Text);
-                        var contentParam = command.Parameters.Add("$Content", SqliteType.Text);
-
-                        appNameParam.Value = appName;
-                        workflowNameParam.Value = workflowName;
-
-                        command.Prepare();
-
-                        foreach (var kvp in dict)
-                        {
-                            runNameParam.Value = kvp.Key;
-                            statusParam.Value = kvp.Value.Status;
-                            startTimeParam.Value = kvp.Value.StartTime.ToString("o"); // ISO 8601
-                            contentParam.Value = ProtectContent(kvp.Value.Content);
-                            await command.ExecuteNonQueryAsync();
-                        }
-                    }
-
-                    transaction.Commit();
-                }
-
-                File.Delete(legacyFilePath);
-            }
-            catch (Exception ex)
-            {
-                AnsiConsole.MarkupLine($"[yellow]Warning:[/] Could not migrate legacy cache file. Starting fresh for this app/workflow. ({Markup.Escape(ex.Message)})");
-            }
+            return;
         }
+
+        try
+        {
+            var json = await File.ReadAllTextAsync(legacyFilePath);
+            var dict = JsonSerializer.Deserialize<Dictionary<string, CachedRun>>(json);
+            if (dict is not null && dict.Count > 0)
+            {
+                await MigrateDictionaryAsync(connection, appName, workflowName, dict);
+            }
+
+            File.Delete(legacyFilePath);
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[yellow]Warning:[/] Could not migrate legacy cache file. Starting fresh for this app/workflow. ({Markup.Escape(ex.Message)})");
+        }
+    }
+
+    private static async Task MigrateDictionaryAsync(
+        SqliteConnection connection,
+        string appName,
+        string workflowName,
+        Dictionary<string, CachedRun> dict)
+    {
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = @"
+            INSERT OR IGNORE INTO Runs (AppName, WorkflowName, RunName, Status, StartTime, Content)
+            VALUES ($AppName, $WorkflowName, $RunName, $Status, $StartTime, $Content);
+        ";
+
+        var (runNameParam, statusParam, startTimeParam, contentParam) = CreateMigrationParameters(command, appName, workflowName);
+        command.Prepare();
+
+        foreach (var (runName, run) in dict)
+        {
+            runNameParam.Value = runName;
+            statusParam.Value = run.Status;
+            startTimeParam.Value = run.StartTime.ToString("o"); // ISO 8601
+            contentParam.Value = ProtectContent(run.Content);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        transaction.Commit();
+    }
+
+    private static (SqliteParameter RunName, SqliteParameter Status, SqliteParameter StartTime, SqliteParameter Content)
+        CreateMigrationParameters(SqliteCommand command, string appName, string workflowName)
+    {
+        var appNameParam = command.Parameters.Add("$AppName", SqliteType.Text);
+        var workflowNameParam = command.Parameters.Add("$WorkflowName", SqliteType.Text);
+        var runNameParam = command.Parameters.Add("$RunName", SqliteType.Text);
+        var statusParam = command.Parameters.Add("$Status", SqliteType.Text);
+        var startTimeParam = command.Parameters.Add("$StartTime", SqliteType.Text);
+        var contentParam = command.Parameters.Add("$Content", SqliteType.Text);
+
+        appNameParam.Value = appName;
+        workflowNameParam.Value = workflowName;
+
+        return (runNameParam, statusParam, startTimeParam, contentParam);
     }
 
     private readonly System.Threading.SemaphoreSlim _dbLock = new(1, 1);
