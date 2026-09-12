@@ -258,9 +258,23 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
 
     async Task<string?> TryFetchAsync(string uri, string? bearer, CancellationToken ct)
     {
+        if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsedUri) ||
+            parsedUri.Scheme != Uri.UriSchemeHttps ||
+            !IsAllowedHost(parsedUri.Host))
+        {
+            return null;
+        }
+
         using var req = new HttpRequestMessage(HttpMethod.Get, uri);
         if (bearer is not null)
+        {
+            if (!parsedUri.Host.Equals("management.azure.com", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+        }
+
         using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!resp.IsSuccessStatusCode)
             return null;
