@@ -261,9 +261,28 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
         using var req = new HttpRequestMessage(HttpMethod.Get, uri);
         if (bearer is not null)
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
-        using var resp = await http.SendAsync(req, ct);
-        return resp.IsSuccessStatusCode
-            ? await resp.Content.ReadAsStringAsync(ct)
-            : null;
+        using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (!resp.IsSuccessStatusCode)
+            return null;
+
+        if (resp.Content.Headers.ContentLength > MaxInputSizeBytes)
+            return null;
+
+        await using var stream = await resp.Content.ReadAsStreamAsync(ct);
+        using var ms = new MemoryStream();
+        var buffer = new byte[8192];
+        int totalRead = 0;
+        int read;
+        while ((read = await stream.ReadAsync(buffer, 0, buffer.Length, ct)) > 0)
+        {
+            totalRead += read;
+            if (totalRead > MaxInputSizeBytes)
+                return null;
+            ms.Write(buffer, 0, read);
+        }
+
+        ms.Position = 0;
+        using var reader = new StreamReader(ms, System.Text.Encoding.UTF8);
+        return await reader.ReadToEndAsync(ct);
     }
 }

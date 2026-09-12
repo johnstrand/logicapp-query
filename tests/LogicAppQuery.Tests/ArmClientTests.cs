@@ -140,6 +140,55 @@ public class ArmClientTests
     }
 
     [Fact]
+    public async Task FetchContentAsync_ContentLengthHeaderExceedsMax_ReturnsNull()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var resp = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("short string")
+            };
+            resp.Content.Headers.ContentLength = (5 * 1024 * 1024) + 1;
+            return resp;
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("https://myaccount.blob.core.windows.net/some/path?sig=123", 100);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Null(result);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task FetchContentAsync_StreamBodyExceedsMax_ReturnsNull()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var stream = new MemoryStream(new byte[(5 * 1024 * 1024) + 10]);
+            var resp = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StreamContent(stream)
+            };
+            resp.Content.Headers.ContentLength = null;
+            return resp;
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("https://myaccount.blob.core.windows.net/some/path?sig=123", 100);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Null(result);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
     public async Task FetchContentAsync_ManagementAzureCom_SendsBearerToken()
     {
         // Arrange
