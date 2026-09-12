@@ -54,8 +54,8 @@ public class ListActionsAsyncTests
         var responseContent = JsonSerializer.Serialize(new ActionListResponse(
             new List<WorkflowAction>
             {
-                new("action1", new WorkflowActionProperties(null, null, null, null)),
-                new("action2", new WorkflowActionProperties(null, null, null, null))
+                new(new WorkflowActionProperties(null, null, null, null)),
+                new(new WorkflowActionProperties(null, null, null, null))
             },
             null
         ));
@@ -76,8 +76,6 @@ public class ListActionsAsyncTests
 
         // Assert
         Assert.Equal(2, actions.Count);
-        Assert.Equal("action1", actions[0].Name);
-        Assert.Equal("action2", actions[1].Name);
 
         Assert.Single(handler.Requests);
         var request = handler.Requests[0];

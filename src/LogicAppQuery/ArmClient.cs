@@ -15,19 +15,21 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
     private AccessToken? _cachedToken;
     private readonly SemaphoreSlim _tokenLock = new SemaphoreSlim(1, 1);
 
+    private bool IsTokenValid => _cachedToken.HasValue && _cachedToken.Value.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(5);
+
     async ValueTask<string> GetBearerTokenAsync(CancellationToken ct)
     {
-        if (_cachedToken.HasValue && _cachedToken.Value.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(5))
+        if (IsTokenValid)
         {
-            return _cachedToken.Value.Token;
+            return _cachedToken!.Value.Token;
         }
 
         await _tokenLock.WaitAsync(ct);
         try
         {
-            if (_cachedToken.HasValue && _cachedToken.Value.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(5))
+            if (IsTokenValid)
             {
-                return _cachedToken.Value.Token;
+                return _cachedToken!.Value.Token;
             }
 
             _cachedToken = await credential.GetTokenAsync(new TokenRequestContext([ArmScope]), ct);

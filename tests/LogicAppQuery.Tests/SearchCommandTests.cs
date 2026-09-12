@@ -77,7 +77,7 @@ public class SearchCommandTests
         {
             for (int i = 0; i < _actionCount; i++)
             {
-                var action = new WorkflowAction($"Action{i}", new WorkflowActionProperties(
+                var action = new WorkflowAction(new WorkflowActionProperties(
                     InputsLink: new ContentLink($"http://example.com/input{i}", 100),
                     OutputsLink: new ContentLink($"http://example.com/output{i}", 100),
                     Inputs: null,
@@ -170,7 +170,9 @@ public class SearchCommandTests
     {
         // Arrange
         var fakeClient = new FakeFailingArmClient();
-        var command = new SearchCommand(fakeClient);
+        var testConsole = new TestConsole();
+        testConsole.Profile.Capabilities.Interactive = false;
+        var command = new SearchCommand(fakeClient, ansiConsole: testConsole);
 
         // Act & Assert
         // We expect it to write the error to console and return without throwing
@@ -178,6 +180,9 @@ public class SearchCommandTests
             "subId", "appName", "workflowName", "search", null, null, CancellationToken.None));
 
         Assert.Null(ex); // Ensures it returns gracefully and doesn't crash
+        Assert.Contains("failed", testConsole.Output);
+        Assert.Contains("Error:", testConsole.Output);
+        Assert.Contains("Simulated discovery failure", testConsole.Output);
     }
 
     [Fact]
@@ -304,7 +309,7 @@ public class SearchCommandTests
         {
             if (runName == "run1")
             {
-                yield return new WorkflowAction("action1", new WorkflowActionProperties(new ContentLink("http://test/input", 10), null, null, null));
+                yield return new WorkflowAction(new WorkflowActionProperties(new ContentLink("http://test/input", 10), null, null, null));
             }
             await Task.CompletedTask;
         }
@@ -332,6 +337,56 @@ public class SearchCommandTests
             var output = testConsole.Output;
             Assert.Contains("match(es)", output);
             Assert.Contains("Searched 2 run(s)", output);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    private class FetchContentThrowsInlinedFallbackArmClient : IArmClient
+    {
+        public Task<string> DiscoverResourceGroupAsync(string subscriptionId, string appName, CancellationToken ct)
+            => Task.FromResult("rg");
+
+        public async IAsyncEnumerable<WorkflowRun> ListRunsAsync(string subscriptionId, string resourceGroup, string appName, string workflowName, DateTimeOffset? start, DateTimeOffset? end, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            var inlinedJson = System.Text.Json.JsonDocument.Parse("{\"payload\":\"fallback_search_term\"}").RootElement;
+            var trigger = new WorkflowRunTrigger(new ContentLink("http://test/link", 10), inlinedJson);
+            yield return new WorkflowRun("run1", new WorkflowRunProperties("Succeeded", DateTimeOffset.UtcNow, trigger));
+            await Task.CompletedTask;
+        }
+
+        public async IAsyncEnumerable<WorkflowAction> ListActionsAsync(string subscriptionId, string resourceGroup, string appName, string workflowName, string runName, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            yield break;
+        }
+
+        public Task<string?> FetchContentAsync(ContentLink link, CancellationToken ct)
+        {
+            throw new Exception("Simulated fetch content exception");
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_FetchContentThrows_LogsWarningAndFallsBackToInlinedContent()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            var fakeClient = new FetchContentThrowsInlinedFallbackArmClient();
+            var testConsole = new TestConsole();
+            testConsole.Profile.Capabilities.Interactive = false;
+            var command = new SearchCommand(fakeClient, cacheDirectory: tempDir, ansiConsole: testConsole);
+
+            await command.ExecuteAsync("subId", "appName", "workflowName", "fallback_search_term", null, null, CancellationToken.None);
+
+            var output = testConsole.Output;
+            Assert.Contains("Failed to fetch content link", output);
+            Assert.Contains("Simulated fetch content exception", output);
+            Assert.Contains("Found 1 match(es)", output);
         }
         finally
         {

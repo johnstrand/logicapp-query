@@ -42,9 +42,8 @@ public class ModelsTests
     public void WorkflowAction_ConstructorAndProperties()
     {
         var props = new WorkflowActionProperties(null, null, null, null);
-        var action = new WorkflowAction("actionName", props);
+        var action = new WorkflowAction(props);
 
-        Assert.Equal("actionName", action.Name);
         Assert.Same(props, action.Properties);
     }
 
