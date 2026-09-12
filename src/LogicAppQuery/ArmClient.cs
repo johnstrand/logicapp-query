@@ -138,12 +138,39 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
     internal static string ExtractResourceGroup(string resourceId)
     {
         ArgumentNullException.ThrowIfNull(resourceId);
-        var parts = resourceId.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        for (int i = 0; i < parts.Length - 1; i++)
+
+        ReadOnlySpan<char> span = resourceId.AsSpan();
+        bool foundResourceGroupSegment = false;
+
+        while (!span.IsEmpty)
         {
-            if (parts[i].Equals("resourceGroups", StringComparison.OrdinalIgnoreCase))
-                return parts[i + 1];
+            int nextSlash = span.IndexOf('/');
+            ReadOnlySpan<char> segment;
+            if (nextSlash < 0)
+            {
+                segment = span;
+                span = default;
+            }
+            else
+            {
+                segment = span[..nextSlash];
+                span = span[(nextSlash + 1)..];
+            }
+
+            if (segment.IsEmpty)
+                continue;
+
+            if (foundResourceGroupSegment)
+            {
+                return segment.ToString();
+            }
+
+            if (segment.Equals("resourceGroups", StringComparison.OrdinalIgnoreCase))
+            {
+                foundResourceGroupSegment = true;
+            }
         }
+
         throw new InvalidOperationException($"Could not extract resource group from resource ID: {resourceId}");
     }
 
