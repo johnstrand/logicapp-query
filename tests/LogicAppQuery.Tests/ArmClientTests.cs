@@ -440,6 +440,49 @@ public class ArmClientTests
     }
 
     [Fact]
+    public async Task DiscoverResourceGroupAsync_TransientEmptyPages_SucceedsOnThirdAttempt()
+    {
+        // Arrange
+        int requestCount = 0;
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            requestCount++;
+            if (requestCount <= 2) // First 2 attempts return empty pages
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{"value":[]}""")
+                };
+            }
+            else // 3rd attempt returns populated page
+            {
+                var content = """
+                {
+                    "value": [
+                        {
+                            "id": "/subscriptions/sub-id/resourceGroups/third-attempt-rg/providers/Microsoft.Web/sites/test-app",
+                            "kind": "workflowapp"
+                        }
+                    ]
+                }
+                """;
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent(content)
+                };
+            }
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act
+        var result = await client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None);
+
+        // Assert
+        Assert.Equal("third-attempt-rg", result);
+        Assert.Equal(3, handler.Requests.Count);
+    }
+
+    [Fact]
     public async Task DiscoverResourceGroupAsync_EmptyPages_ThrowsAfter3Attempts()
     {
         // Arrange
