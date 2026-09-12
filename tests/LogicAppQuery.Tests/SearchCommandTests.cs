@@ -369,6 +369,27 @@ public class SearchCommandTests
         }
     }
 
+    [Theory]
+    [InlineData("\u001b[31mRed Text\u001b[0m", "Red Text")]
+    [InlineData("\u001b]0;Evil Title\u0007Normal Text", "Normal Text")]
+    [InlineData("Line\tWith\tTabs", "Line With Tabs")]
+    [InlineData("Text\u0000With\u0007Control\u001b_Chars", "TextWithControlChars")]
+    public void StripAnsiEscapeSequences_StripsAnsiAndControlCodes(string input, string expected)
+    {
+        var result = SearchCommand.StripAnsiEscapeSequences(input);
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void BuildSnippet_StripsTerminalEscapeSequences()
+    {
+        var content = "Prefix \u001b[31m\u001b[2Jmalicious\u001b[0m payload match here.";
+        var result = SearchCommand.BuildSnippet(content, "match");
+
+        Assert.False(result.Contains('\u001b'), $"Actual result string was: '{result}'");
+        Assert.Contains("malicious payload match here.", result);
+    }
+
     private class FetchContentThrowsInlinedFallbackArmClient : IArmClient
     {
         public Task<string> DiscoverResourceGroupAsync(string subscriptionId, string appName, CancellationToken ct)
