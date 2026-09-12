@@ -15,19 +15,21 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
     private AccessToken? _cachedToken;
     private readonly SemaphoreSlim _tokenLock = new SemaphoreSlim(1, 1);
 
+    private bool IsTokenValid => _cachedToken.HasValue && _cachedToken.Value.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(5);
+
     async ValueTask<string> GetBearerTokenAsync(CancellationToken ct)
     {
-        if (_cachedToken.HasValue && _cachedToken.Value.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(5))
+        if (IsTokenValid)
         {
-            return _cachedToken.Value.Token;
+            return _cachedToken!.Value.Token;
         }
 
         await _tokenLock.WaitAsync(ct);
         try
         {
-            if (_cachedToken.HasValue && _cachedToken.Value.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(5))
+            if (IsTokenValid)
             {
-                return _cachedToken.Value.Token;
+                return _cachedToken!.Value.Token;
             }
 
             _cachedToken = await credential.GetTokenAsync(new TokenRequestContext([ArmScope]), ct);
@@ -136,12 +138,39 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
     internal static string ExtractResourceGroup(string resourceId)
     {
         ArgumentNullException.ThrowIfNull(resourceId);
-        var parts = resourceId.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        for (int i = 0; i < parts.Length - 1; i++)
+
+        ReadOnlySpan<char> span = resourceId.AsSpan();
+        bool foundResourceGroupSegment = false;
+
+        while (!span.IsEmpty)
         {
-            if (parts[i].Equals("resourceGroups", StringComparison.OrdinalIgnoreCase))
-                return parts[i + 1];
+            int nextSlash = span.IndexOf('/');
+            ReadOnlySpan<char> segment;
+            if (nextSlash < 0)
+            {
+                segment = span;
+                span = default;
+            }
+            else
+            {
+                segment = span[..nextSlash];
+                span = span[(nextSlash + 1)..];
+            }
+
+            if (segment.IsEmpty)
+                continue;
+
+            if (foundResourceGroupSegment)
+            {
+                return segment.ToString();
+            }
+
+            if (segment.Equals("resourceGroups", StringComparison.OrdinalIgnoreCase))
+            {
+                foundResourceGroupSegment = true;
+            }
         }
+
         throw new InvalidOperationException($"Could not extract resource group from resource ID: {resourceId}");
     }
 
@@ -246,9 +275,28 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
         }
 
-        using var resp = await http.SendAsync(req, ct);
-        return resp.IsSuccessStatusCode
-            ? await resp.Content.ReadAsStringAsync(ct)
-            : null;
+        using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (!resp.IsSuccessStatusCode)
+            return null;
+
+        if (resp.Content.Headers.ContentLength > MaxInputSizeBytes)
+            return null;
+
+        await using var stream = await resp.Content.ReadAsStreamAsync(ct);
+        using var ms = new MemoryStream();
+        var buffer = new byte[8192];
+        int totalRead = 0;
+        int read;
+        while ((read = await stream.ReadAsync(buffer, 0, buffer.Length, ct)) > 0)
+        {
+            totalRead += read;
+            if (totalRead > MaxInputSizeBytes)
+                return null;
+            ms.Write(buffer, 0, read);
+        }
+
+        ms.Position = 0;
+        using var reader = new StreamReader(ms, System.Text.Encoding.UTF8);
+        return await reader.ReadToEndAsync(ct);
     }
 }
