@@ -44,6 +44,17 @@ public class ArmClientTests
     }
 
     [Fact]
+    public void ExtractResourceGroup_InvalidIdFormat_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var resourceId = "invalid-resource-id-format";
+
+        // Act & Assert
+        var exception = Assert.Throws<InvalidOperationException>(() => ArmClient.ExtractResourceGroup(resourceId));
+        Assert.Contains("Could not extract resource group from resource ID", exception.Message);
+    }
+
+    [Fact]
     public void ExtractResourceGroup_NullString_ThrowsArgumentNullException()
     {
         // Arrange
