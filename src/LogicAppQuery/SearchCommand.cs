@@ -1,9 +1,11 @@
 using Spectre.Console;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace LogicAppQuery;
 
-internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory = null, IAnsiConsole? ansiConsole = null)
+internal partial class SearchCommand(IArmClient armClient, string? cacheDirectory = null, IAnsiConsole? ansiConsole = null)
 {
     const int SnippetRadius = 100;
     const int MaxSnippetLength = 300;
@@ -20,9 +22,9 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
         DateTimeOffset? end,
         CancellationToken ct)
     {
-        _console.MarkupLine($"[bold]App:[/]      [cyan]{Markup.Escape(appName)}[/]");
-        _console.MarkupLine($"[bold]Workflow:[/] [cyan]{Markup.Escape(workflowName)}[/]");
-        _console.MarkupLine($"[bold]Search:[/]   [yellow]{Markup.Escape(searchTerm)}[/]");
+        _console.MarkupLine($"[bold]App:[/]      [cyan]{Markup.Escape(StripAnsiEscapeSequences(appName))}[/]");
+        _console.MarkupLine($"[bold]Workflow:[/] [cyan]{Markup.Escape(StripAnsiEscapeSequences(workflowName))}[/]");
+        _console.MarkupLine($"[bold]Search:[/]   [yellow]{Markup.Escape(StripAnsiEscapeSequences(searchTerm))}[/]");
         if (start.HasValue) _console.MarkupLine($"[bold]From:[/]     {start.Value.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC");
         if (end.HasValue)   _console.MarkupLine($"[bold]To:[/]       {end.Value.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC");
         _console.WriteLine();
@@ -36,10 +38,10 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
         catch (Exception ex)
         {
             _console.MarkupLine("[red]failed[/]");
-            _console.MarkupLine($"[red]Error:[/] {Markup.Escape(ex.Message)}");
+            _console.MarkupLine($"[red]Error:[/] {Markup.Escape(StripAnsiEscapeSequences(ex.Message))}");
             return;
         }
-        _console.MarkupLine($"[green]{Markup.Escape(resourceGroup)}[/]");
+        _console.MarkupLine($"[green]{Markup.Escape(StripAnsiEscapeSequences(resourceGroup))}[/]");
         _console.WriteLine();
 
         await using var cache = await RunCache.LoadAsync(appName, workflowName, cacheDirectory);
@@ -113,11 +115,12 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
                     run.Properties.Status, run.Properties.StartTime, content));
         }
 
-        if (!content.AsSpan().Contains(state.SearchTerm.AsSpan(), StringComparison.OrdinalIgnoreCase))
+        var index = content.IndexOf(state.SearchTerm, StringComparison.OrdinalIgnoreCase);
+        if (index < 0)
             return;
 
         Interlocked.Increment(ref state.MatchCount);
-        var snippet = BuildSnippet(content, state.SearchTerm);
+        var snippet = BuildSnippet(content, state.SearchTerm, index);
         var statusColor = run.Properties.Status switch
         {
             "Succeeded"              => "green",
@@ -132,8 +135,8 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
             _console.MarkupLine(
                 $"[bold green]MATCH[/]  " +
                 $"[grey]{run.Properties.StartTime.UtcDateTime:yyyy-MM-dd HH:mm:ss}[/]  " +
-                $"[{statusColor}]{Markup.Escape(run.Properties.Status)}[/]  " +
-                $"[dim]{Markup.Escape(run.Name)}[/]");
+                $"[{statusColor}]{Markup.Escape(StripAnsiEscapeSequences(run.Properties.Status))}[/]  " +
+                $"[dim]{Markup.Escape(StripAnsiEscapeSequences(run.Name))}[/]");
             _console.MarkupLine($"  [dim italic]{Markup.Escape(snippet)}[/]");
             _console.WriteLine();
         }
@@ -210,7 +213,7 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
             {
                 lock (_consoleLock)
                 {
-                    _console.MarkupLine($"[yellow]Warning:[/] Failed to fetch content link ({Markup.Escape(ex.Message)}). Falling back to inlined content.");
+                    _console.MarkupLine($"[yellow]Warning:[/] Failed to fetch content link ({Markup.Escape(StripAnsiEscapeSequences(ex.Message))}). Falling back to inlined content.");
                 }
             }
         }
@@ -236,9 +239,33 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
         public required string SearchTerm { get; init; }
     }
 
-    internal static string BuildSnippet(string content, string searchTerm)
+    [GeneratedRegex("\u001b(?:][^\u0007\u001b]*(?:\u0007|\u001b\\\\)|\\[[0-?]*[ -/]*[@-~]|[@-Z\\\\-_])")]
+    private static partial Regex AnsiEscapeRegex();
+
+    internal static string StripAnsiEscapeSequences(string input)
     {
-        var idx = content.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase);
+        if (string.IsNullOrEmpty(input))
+            return input;
+
+        var sanitized = AnsiEscapeRegex().Replace(input, string.Empty);
+        var sb = new StringBuilder(sanitized.Length);
+        foreach (var c in sanitized)
+        {
+            if (!char.IsControl(c))
+            {
+                sb.Append(c);
+            }
+            else if (c == '\t')
+            {
+                sb.Append(' ');
+            }
+        }
+        return sb.ToString();
+    }
+
+    internal static string BuildSnippet(string content, string searchTerm, int matchIndex = -1)
+    {
+        var idx = matchIndex >= 0 ? matchIndex : content.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase);
         if (idx < 0) return string.Empty;
 
         var start  = Math.Max(0, idx - SnippetRadius);
@@ -247,7 +274,11 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
         var prefix = start > 0 ? "..." : "";
         var suffix = end < content.Length ? "..." : "";
         var snippet = $"{prefix}{raw}{suffix}";
-        return snippet.Length > MaxSnippetLength ? $"{snippet.AsSpan(0, MaxSnippetLength)}..." : snippet;
+        if (snippet.Length > MaxSnippetLength)
+        {
+            snippet = $"{snippet.AsSpan(0, MaxSnippetLength)}...";
+        }
+        return StripAnsiEscapeSequences(snippet);
     }
 }
 
