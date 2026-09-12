@@ -113,11 +113,12 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
                     run.Properties.Status, run.Properties.StartTime, content));
         }
 
-        if (!content.AsSpan().Contains(state.SearchTerm.AsSpan(), StringComparison.OrdinalIgnoreCase))
+        var index = content.IndexOf(state.SearchTerm, StringComparison.OrdinalIgnoreCase);
+        if (index < 0)
             return;
 
         Interlocked.Increment(ref state.MatchCount);
-        var snippet = BuildSnippet(content, state.SearchTerm);
+        var snippet = BuildSnippet(content, state.SearchTerm, index);
         var statusColor = run.Properties.Status switch
         {
             "Succeeded"              => "green",
@@ -236,9 +237,9 @@ internal sealed class SearchCommand(IArmClient armClient, string? cacheDirectory
         public required string SearchTerm { get; init; }
     }
 
-    internal static string BuildSnippet(string content, string searchTerm)
+    internal static string BuildSnippet(string content, string searchTerm, int matchIndex = -1)
     {
-        var idx = content.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase);
+        var idx = matchIndex >= 0 ? matchIndex : content.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase);
         if (idx < 0) return string.Empty;
 
         var start  = Math.Max(0, idx - SnippetRadius);
