@@ -832,4 +832,19 @@ public class ArmClientTests
         Assert.Contains(Uri.EscapeDataString(workflowName), requestUri);
         Assert.Contains(Uri.EscapeDataString(runName), requestUri);
     }
+
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_403Forbidden_ThrowsUnauthorizedAccessException()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.Forbidden));
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None));
+
+        Assert.Contains("Access denied (403) calling ARM API.", ex.Message);
+        Assert.Contains("Ensure your account has at least Reader role on the subscription or Logic App resource.", ex.Message);
+    }
 }
