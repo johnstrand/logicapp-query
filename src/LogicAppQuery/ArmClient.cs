@@ -12,31 +12,33 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
     const string ArmBase = "https://management.azure.com";
     const long MaxInputSizeBytes = 5 * 1024 * 1024; // 5 MB
 
-    private AccessToken? _cachedToken;
-    private readonly SemaphoreSlim _tokenLock = new SemaphoreSlim(1, 1);
+    private Task<AccessToken>? _tokenTask;
+    private readonly object _tokenLock = new();
+
+    private static bool NeedsNewToken(Task<AccessToken>? task)
+    {
+        return task is null || task.IsFaulted || task.IsCanceled ||
+               (task.IsCompletedSuccessfully && task.Result.ExpiresOn <= DateTimeOffset.UtcNow.AddMinutes(5));
+    }
 
     async ValueTask<string> GetBearerTokenAsync(CancellationToken ct)
     {
-        if (_cachedToken.HasValue && _cachedToken.Value.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(5))
-        {
-            return _cachedToken.Value.Token;
-        }
+        var task = _tokenTask;
 
-        await _tokenLock.WaitAsync(ct);
-        try
+        if (NeedsNewToken(task))
         {
-            if (_cachedToken.HasValue && _cachedToken.Value.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(5))
+            lock (_tokenLock)
             {
-                return _cachedToken.Value.Token;
+                task = _tokenTask;
+                if (NeedsNewToken(task))
+                {
+                    _tokenTask = task = credential.GetTokenAsync(new TokenRequestContext([ArmScope]), CancellationToken.None).AsTask();
+                }
             }
+        }
 
-            _cachedToken = await credential.GetTokenAsync(new TokenRequestContext([ArmScope]), ct);
-            return _cachedToken.Value.Token;
-        }
-        finally
-        {
-            _tokenLock.Release();
-        }
+        var token = await task!.WaitAsync(ct);
+        return token.Token;
     }
 
     async Task<T> GetArmJsonAsync<T>(string url, CancellationToken ct)
