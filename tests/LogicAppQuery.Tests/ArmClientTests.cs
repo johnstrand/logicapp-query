@@ -367,6 +367,74 @@ public class ArmClientTests
     }
 
     [Fact]
+    public async Task DiscoverResourceGroupAsync_MultipleMatches_NoneHaveWorkflowApp_SelectsFirstResource()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var content = """
+            {
+                "value": [
+                    {
+                        "id": "/subscriptions/sub-id/resourceGroups/first-rg/providers/Microsoft.Web/sites/test-app",
+                        "kind": "app"
+                    },
+                    {
+                        "id": "/subscriptions/sub-id/resourceGroups/second-rg/providers/Microsoft.Web/sites/test-app",
+                        "kind": "functionapp"
+                    }
+                ]
+            }
+            """;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(content)
+            };
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act
+        var result = await client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None);
+
+        // Assert
+        Assert.Equal("first-rg", result);
+    }
+
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_MultipleMatches_CaseInsensitiveAndNullKinds_SelectsWorkflowApp()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var content = """
+            {
+                "value": [
+                    {
+                        "id": "/subscriptions/sub-id/resourceGroups/null-kind-rg/providers/Microsoft.Web/sites/test-app",
+                        "kind": null
+                    },
+                    {
+                        "id": "/subscriptions/sub-id/resourceGroups/uppercase-kind-rg/providers/Microsoft.Web/sites/test-app",
+                        "kind": "WORKFLOWAPP,FUNCTIONAPP"
+                    }
+                ]
+            }
+            """;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(content)
+            };
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act
+        var result = await client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None);
+
+        // Assert
+        Assert.Equal("uppercase-kind-rg", result);
+    }
+
+    [Fact]
     public async Task DiscoverResourceGroupAsync_Pagination_FollowsNextLink()
     {
         // Arrange
