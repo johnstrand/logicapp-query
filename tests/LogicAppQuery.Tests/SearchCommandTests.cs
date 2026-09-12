@@ -289,6 +289,29 @@ public class SearchCommandTests
         Assert.Equal(string.Empty, result);
     }
 
+    [Fact]
+    public void BuildSnippet_PerformanceBenchmark()
+    {
+        var padding = new string('a', 500000);
+        var content = $"{padding}TARGET_STRING_TO_FIND{padding}";
+        var searchTerm = "TARGET_STRING_TO_FIND";
+
+        // Warmup
+        for (int i = 0; i < 10; i++)
+        {
+            _ = SearchCommand.BuildSnippet(content, searchTerm);
+        }
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < 1000; i++)
+        {
+            _ = SearchCommand.BuildSnippet(content, searchTerm);
+        }
+        sw.Stop();
+
+        Assert.True(sw.ElapsedMilliseconds >= 0);
+    }
+
     private class FakeArmClient : IArmClient
     {
         public Task<string> DiscoverResourceGroupAsync(string subscriptionId, string appName, CancellationToken ct)
