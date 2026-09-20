@@ -6,11 +6,13 @@ using System.Text.RegularExpressions;
 
 namespace LogicAppQuery;
 
-internal sealed partial class ArmClient(TokenCredential credential, HttpClient http) : IArmClient
+internal sealed partial class ArmClient(TokenCredential credential, HttpClient http, string baseUrl = "https://management.azure.com") : IArmClient
 {
-    const string ArmScope = "https://management.azure.com/.default";
-    const string ArmBase = "https://management.azure.com";
     const long MaxInputSizeBytes = 5 * 1024 * 1024; // 5 MB
+
+    private readonly string _baseUrl = baseUrl.TrimEnd('/');
+    private readonly string _armScope = $"{baseUrl.TrimEnd('/')}/.default";
+    private readonly string _armHost = new Uri(baseUrl).Host;
 
     private Task<AccessToken>? _tokenTask;
     private readonly object _tokenLock = new();
@@ -32,7 +34,7 @@ internal sealed partial class ArmClient(TokenCredential credential, HttpClient h
                 task = _tokenTask;
                 if (NeedsNewToken(task))
                 {
-                    _tokenTask = task = credential.GetTokenAsync(new TokenRequestContext([ArmScope]), CancellationToken.None).AsTask();
+                    _tokenTask = task = credential.GetTokenAsync(new TokenRequestContext([_armScope]), CancellationToken.None).AsTask();
                 }
             }
         }
@@ -45,9 +47,9 @@ internal sealed partial class ArmClient(TokenCredential credential, HttpClient h
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var parsedUri) ||
             !parsedUri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ||
-            !parsedUri.Host.Equals("management.azure.com", StringComparison.OrdinalIgnoreCase))
+            !parsedUri.Host.Equals(_armHost, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException($"Invalid ARM API URL. URL must be a valid https URL for management.azure.com");
+            throw new InvalidOperationException($"Invalid ARM API URL. URL must be a valid https URL for {_armHost}");
         }
 
         var bearer = await GetBearerTokenAsync(ct);
@@ -113,7 +115,7 @@ internal sealed partial class ArmClient(TokenCredential credential, HttpClient h
             if (attempt > 0)
                 await Task.Delay(TimeSpan.FromSeconds(attempt * 2), ct);
 
-            string? nextUrl = $"{ArmBase}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resources?$filter={filter}&api-version=2021-04-01";
+            string? nextUrl = $"{_baseUrl}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resources?$filter={filter}&api-version=2021-04-01";
             while (nextUrl is not null)
             {
                 var page = await GetArmJsonAsync<ResourceListResponse>(nextUrl, ct);
@@ -151,9 +153,9 @@ internal sealed partial class ArmClient(TokenCredential credential, HttpClient h
         throw new InvalidOperationException($"Could not extract resource group from resource ID: {resourceId}");
     }
 
-    private static string BuildWorkflowBaseUrl(string subscriptionId, string resourceGroup, string appName, string workflowName)
+    private string BuildWorkflowBaseUrl(string subscriptionId, string resourceGroup, string appName, string workflowName)
     {
-        return $"{ArmBase}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resourceGroups/{Uri.EscapeDataString(resourceGroup)}" +
+        return $"{_baseUrl}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resourceGroups/{Uri.EscapeDataString(resourceGroup)}" +
                $"/providers/Microsoft.Web/sites/{Uri.EscapeDataString(appName)}" +
                $"/hostruntime/runtime/webhooks/workflow/api/management" +
                $"/workflows/{Uri.EscapeDataString(workflowName)}";
@@ -194,9 +196,9 @@ internal sealed partial class ArmClient(TokenCredential credential, HttpClient h
         return GetPaginatedAsync<ActionListResponse, WorkflowAction>(url, ct);
     }
 
-    private static bool IsAllowedHost(string host)
+    private bool IsAllowedHost(string host)
     {
-        return host.Equals("management.azure.com", StringComparison.OrdinalIgnoreCase) ||
+        return host.Equals(_armHost, StringComparison.OrdinalIgnoreCase) ||
                host.EndsWith(".blob.core.windows.net", StringComparison.OrdinalIgnoreCase) ||
                host.EndsWith(".file.core.windows.net", StringComparison.OrdinalIgnoreCase);
     }
@@ -220,7 +222,7 @@ internal sealed partial class ArmClient(TokenCredential credential, HttpClient h
             return await TryFetchAsync(link.Uri, null, ct);
         }
 
-        if (parsedUri.Host.Equals("management.azure.com", StringComparison.OrdinalIgnoreCase))
+        if (parsedUri.Host.Equals(_armHost, StringComparison.OrdinalIgnoreCase))
         {
             var bearer = await GetBearerTokenAsync(ct);
 

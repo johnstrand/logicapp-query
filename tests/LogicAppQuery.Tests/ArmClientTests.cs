@@ -1,4 +1,5 @@
 using System;
+using Azure.Core;
 using Xunit;
 using LogicAppQuery;
 
@@ -1099,5 +1100,62 @@ public class ArmClientTests
         // Assert
         Assert.Null(result);
         Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task ArmClient_CustomBaseUrlWithTrailingSlash_TrimsSlashAndUsesCustomHostAndScope()
+    {
+        // Arrange
+        TokenRequestContext? capturedRequestContext = null;
+        var customCredential = new CapturingTokenCredential(ctx => capturedRequestContext = ctx);
+        var handler = new MockHttpMessageHandler(request =>
+        {
+            var content = """
+            {
+                "value": [
+                    {
+                        "id": "/subscriptions/sub1/resourceGroups/custom-rg/providers/Microsoft.Web/sites/app1",
+                        "kind": "workflowapp"
+                    }
+                ]
+            }
+            """;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(content) };
+        });
+
+        var customBaseUrl = "https://management.usgovcloudapi.net/";
+        var client = new ArmClient(customCredential, new HttpClient(handler), customBaseUrl);
+
+        // Act
+        var rg = await client.DiscoverResourceGroupAsync("sub1", "app1", CancellationToken.None);
+
+        // Assert
+        Assert.Equal("custom-rg", rg);
+        Assert.Single(handler.Requests);
+        Assert.StartsWith("https://management.usgovcloudapi.net/subscriptions/", handler.Requests[0].RequestUri?.ToString());
+        Assert.NotNull(capturedRequestContext);
+        Assert.Contains("https://management.usgovcloudapi.net/.default", capturedRequestContext.Value.Scopes);
+    }
+
+    private class CapturingTokenCredential : Azure.Core.TokenCredential
+    {
+        private readonly Action<TokenRequestContext> _onGetToken;
+
+        public CapturingTokenCredential(Action<TokenRequestContext> onGetToken)
+        {
+            _onGetToken = onGetToken;
+        }
+
+        public override Azure.Core.AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken)
+        {
+            _onGetToken(requestContext);
+            return new Azure.Core.AccessToken("fake-gov-token", DateTimeOffset.UtcNow.AddHours(1));
+        }
+
+        public override ValueTask<Azure.Core.AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken)
+        {
+            _onGetToken(requestContext);
+            return new ValueTask<Azure.Core.AccessToken>(new Azure.Core.AccessToken("fake-gov-token", DateTimeOffset.UtcNow.AddHours(1)));
+        }
     }
 }
