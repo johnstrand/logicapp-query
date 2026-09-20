@@ -8,6 +8,8 @@ namespace LogicAppQuery;
 
 internal sealed partial class ArmClient(TokenCredential credential, HttpClient http, string baseUrl = "https://management.azure.com") : IArmClient
 {
+    [GeneratedRegex(@"^[a-zA-Z0-9\-]+$")]
+    private static partial Regex AppNameRegex();
     const long MaxInputSizeBytes = 5 * 1024 * 1024; // 5 MB
 
     private readonly string _baseUrl = baseUrl.TrimEnd('/');
@@ -100,7 +102,7 @@ internal sealed partial class ArmClient(TokenCredential credential, HttpClient h
 
     public async Task<string> DiscoverResourceGroupAsync(string subscriptionId, string appName, CancellationToken ct)
     {
-        if (!Regex.IsMatch(appName, @"^[a-zA-Z0-9\-]+$"))
+        if (!AppNameRegex().IsMatch(appName))
         {
             throw new ArgumentException($"Invalid app name format: {appName}. Only alphanumeric characters and hyphens are allowed.", nameof(appName));
         }
