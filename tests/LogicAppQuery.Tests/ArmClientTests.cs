@@ -1,4 +1,5 @@
 using System;
+using Azure.Core;
 using Xunit;
 using LogicAppQuery;
 
@@ -37,6 +38,17 @@ public class ArmClientTests
     {
         // Arrange
         var resourceId = "/subscriptions/12345678-1234-1234-1234-123456789012/providers/Microsoft.Web/sites/my-app";
+
+        // Act & Assert
+        var exception = Assert.Throws<InvalidOperationException>(() => ArmClient.ExtractResourceGroup(resourceId));
+        Assert.Contains("Could not extract resource group from resource ID", exception.Message);
+    }
+
+    [Fact]
+    public void ExtractResourceGroup_InvalidIdFormat_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var resourceId = "invalid-resource-id-format";
 
         // Act & Assert
         var exception = Assert.Throws<InvalidOperationException>(() => ArmClient.ExtractResourceGroup(resourceId));
@@ -126,6 +138,55 @@ public class ArmClientTests
         // Assert
         Assert.Null(result);
         Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task FetchContentAsync_ContentLengthHeaderExceedsMax_ReturnsNull()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var resp = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("short string")
+            };
+            resp.Content.Headers.ContentLength = (5 * 1024 * 1024) + 1;
+            return resp;
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("https://myaccount.blob.core.windows.net/some/path?sig=123", 100);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Null(result);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task FetchContentAsync_StreamBodyExceedsMax_ReturnsNull()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var stream = new MemoryStream(new byte[(5 * 1024 * 1024) + 10]);
+            var resp = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StreamContent(stream)
+            };
+            resp.Content.Headers.ContentLength = null;
+            return resp;
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("https://myaccount.blob.core.windows.net/some/path?sig=123", 100);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Null(result);
+        Assert.Single(handler.Requests);
     }
 
     [Fact]
@@ -356,6 +417,74 @@ public class ArmClientTests
     }
 
     [Fact]
+    public async Task DiscoverResourceGroupAsync_MultipleMatches_NoneHaveWorkflowApp_SelectsFirstResource()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var content = """
+            {
+                "value": [
+                    {
+                        "id": "/subscriptions/sub-id/resourceGroups/first-rg/providers/Microsoft.Web/sites/test-app",
+                        "kind": "app"
+                    },
+                    {
+                        "id": "/subscriptions/sub-id/resourceGroups/second-rg/providers/Microsoft.Web/sites/test-app",
+                        "kind": "functionapp"
+                    }
+                ]
+            }
+            """;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(content)
+            };
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act
+        var result = await client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None);
+
+        // Assert
+        Assert.Equal("first-rg", result);
+    }
+
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_MultipleMatches_CaseInsensitiveAndNullKinds_SelectsWorkflowApp()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var content = """
+            {
+                "value": [
+                    {
+                        "id": "/subscriptions/sub-id/resourceGroups/null-kind-rg/providers/Microsoft.Web/sites/test-app",
+                        "kind": null
+                    },
+                    {
+                        "id": "/subscriptions/sub-id/resourceGroups/uppercase-kind-rg/providers/Microsoft.Web/sites/test-app",
+                        "kind": "WORKFLOWAPP,FUNCTIONAPP"
+                    }
+                ]
+            }
+            """;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(content)
+            };
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act
+        var result = await client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None);
+
+        // Assert
+        Assert.Equal("uppercase-kind-rg", result);
+    }
+
+    [Fact]
     public async Task DiscoverResourceGroupAsync_Pagination_FollowsNextLink()
     {
         // Arrange
@@ -440,6 +569,49 @@ public class ArmClientTests
     }
 
     [Fact]
+    public async Task DiscoverResourceGroupAsync_TransientEmptyPages_SucceedsOnThirdAttempt()
+    {
+        // Arrange
+        int requestCount = 0;
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            requestCount++;
+            if (requestCount <= 2) // First 2 attempts return empty pages
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{"value":[]}""")
+                };
+            }
+            else // 3rd attempt returns populated page
+            {
+                var content = """
+                {
+                    "value": [
+                        {
+                            "id": "/subscriptions/sub-id/resourceGroups/third-attempt-rg/providers/Microsoft.Web/sites/test-app",
+                            "kind": "workflowapp"
+                        }
+                    ]
+                }
+                """;
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent(content)
+                };
+            }
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act
+        var result = await client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None);
+
+        // Assert
+        Assert.Equal("third-attempt-rg", result);
+        Assert.Equal(3, handler.Requests.Count);
+    }
+
+    [Fact]
     public async Task DiscoverResourceGroupAsync_EmptyPages_ThrowsAfter3Attempts()
     {
         // Arrange
@@ -458,6 +630,27 @@ public class ArmClientTests
 
         Assert.Contains("No site named 'test-app' found", ex.Message);
         Assert.Equal(3, handler.Requests.Count); // 3 attempts made
+    }
+
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_NoAppFound_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"value":[]}""")
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var subscriptionId = "sub-id";
+        var appName = "non-existent-app";
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.DiscoverResourceGroupAsync(subscriptionId, appName, CancellationToken.None));
+
+        var expectedMessage = $"No site named '{appName}' found in subscription '{subscriptionId}'. Verify the app name and that your account has access.";
+        Assert.Equal(expectedMessage, ex.Message);
+        Assert.Equal(3, handler.Requests.Count);
     }
 
     private class FakeTokenCredential : Azure.Core.TokenCredential
@@ -810,10 +1003,6 @@ public class ArmClientTests
 
         // Assert
         Assert.Equal(2, actions.Count);
-        Assert.Equal("Action1", actions[0].Name);
-        Assert.Equal("Succeeded", actions[0].Properties.Status);
-        Assert.Equal("Action2", actions[1].Name);
-        Assert.Equal("Failed", actions[1].Properties.Status);
         Assert.Equal(2, handler.Requests.Count);
     }
 
@@ -861,5 +1050,142 @@ public class ArmClientTests
         Assert.Contains(Uri.EscapeDataString(appName), requestUri);
         Assert.Contains(Uri.EscapeDataString(workflowName), requestUri);
         Assert.Contains(Uri.EscapeDataString(runName), requestUri);
+    }
+
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_401Unauthorized_ThrowsUnauthorizedAccessException()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized));
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None));
+
+        Assert.Contains("Authentication failed (401) calling ARM API", ex.Message);
+        Assert.Contains("Ensure you are logged in with 'az login'", ex.Message);
+    }
+
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_403Forbidden_ThrowsUnauthorizedAccessException()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.Forbidden));
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None));
+
+        Assert.Contains("Access denied (403) calling ARM API", ex.Message);
+        Assert.Contains("Ensure your account has at least Reader role", ex.Message);
+    }
+
+    [Fact]
+    public async Task FetchContentAsync_BlobStorageWithoutSig_DoesNotSendBearerToken()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("https://myaccount.blob.core.windows.net/some/path", 100);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Single(handler.Requests);
+        var req = handler.Requests[0];
+        Assert.Null(req.Headers.Authorization);
+    }
+
+    [Fact]
+    public async Task FetchContentAsync_FileStorageWithoutSig_DoesNotSendBearerToken()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("https://myaccount.file.core.windows.net/some/path", 100);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Single(handler.Requests);
+        var req = handler.Requests[0];
+        Assert.Null(req.Headers.Authorization);
+    }
+
+    [Fact]
+    public async Task FetchContentAsync_DisallowedHost_ReturnsNull()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var link = new ContentLink("https://evil.com/payload", 100);
+
+        // Act
+        var result = await client.FetchContentAsync(link, CancellationToken.None);
+
+        // Assert
+        Assert.Null(result);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task ArmClient_CustomBaseUrlWithTrailingSlash_TrimsSlashAndUsesCustomHostAndScope()
+    {
+        // Arrange
+        TokenRequestContext? capturedRequestContext = null;
+        var customCredential = new CapturingTokenCredential(ctx => capturedRequestContext = ctx);
+        var handler = new MockHttpMessageHandler(request =>
+        {
+            var content = """
+            {
+                "value": [
+                    {
+                        "id": "/subscriptions/sub1/resourceGroups/custom-rg/providers/Microsoft.Web/sites/app1",
+                        "kind": "workflowapp"
+                    }
+                ]
+            }
+            """;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(content) };
+        });
+
+        var customBaseUrl = "https://management.usgovcloudapi.net/";
+        var client = new ArmClient(customCredential, new HttpClient(handler), customBaseUrl);
+
+        // Act
+        var rg = await client.DiscoverResourceGroupAsync("sub1", "app1", CancellationToken.None);
+
+        // Assert
+        Assert.Equal("custom-rg", rg);
+        Assert.Single(handler.Requests);
+        Assert.StartsWith("https://management.usgovcloudapi.net/subscriptions/", handler.Requests[0].RequestUri?.ToString());
+        Assert.NotNull(capturedRequestContext);
+        Assert.Contains("https://management.usgovcloudapi.net/.default", capturedRequestContext.Value.Scopes);
+    }
+
+    private class CapturingTokenCredential : Azure.Core.TokenCredential
+    {
+        private readonly Action<TokenRequestContext> _onGetToken;
+
+        public CapturingTokenCredential(Action<TokenRequestContext> onGetToken)
+        {
+            _onGetToken = onGetToken;
+        }
+
+        public override Azure.Core.AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken)
+        {
+            _onGetToken(requestContext);
+            return new Azure.Core.AccessToken("fake-gov-token", DateTimeOffset.UtcNow.AddHours(1));
+        }
+
+        public override ValueTask<Azure.Core.AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken)
+        {
+            _onGetToken(requestContext);
+            return new ValueTask<Azure.Core.AccessToken>(new Azure.Core.AccessToken("fake-gov-token", DateTimeOffset.UtcNow.AddHours(1)));
+        }
     }
 }

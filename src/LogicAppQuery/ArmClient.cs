@@ -6,46 +6,52 @@ using System.Text.RegularExpressions;
 
 namespace LogicAppQuery;
 
-internal sealed class ArmClient(TokenCredential credential, HttpClient http) : IArmClient
+internal sealed partial class ArmClient(TokenCredential credential, HttpClient http, string baseUrl = "https://management.azure.com") : IArmClient
 {
-    const string ArmScope = "https://management.azure.com/.default";
-    const string ArmBase = "https://management.azure.com";
+    [GeneratedRegex(@"^[a-zA-Z0-9\-]+$")]
+    private static partial Regex AppNameRegex();
     const long MaxInputSizeBytes = 5 * 1024 * 1024; // 5 MB
 
-    private AccessToken? _cachedToken;
-    private readonly SemaphoreSlim _tokenLock = new SemaphoreSlim(1, 1);
+    private readonly string _baseUrl = baseUrl.TrimEnd('/');
+    private readonly string _armScope = $"{baseUrl.TrimEnd('/')}/.default";
+    private readonly string _armHost = new Uri(baseUrl).Host;
+
+    private Task<AccessToken>? _tokenTask;
+    private readonly object _tokenLock = new();
+
+    private static bool NeedsNewToken(Task<AccessToken>? task)
+    {
+        return task is null || task.IsFaulted || task.IsCanceled ||
+               (task.IsCompletedSuccessfully && task.Result.ExpiresOn <= DateTimeOffset.UtcNow.AddMinutes(5));
+    }
 
     async ValueTask<string> GetBearerTokenAsync(CancellationToken ct)
     {
-        if (_cachedToken.HasValue && _cachedToken.Value.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(5))
-        {
-            return _cachedToken.Value.Token;
-        }
+        var task = _tokenTask;
 
-        await _tokenLock.WaitAsync(ct);
-        try
+        if (NeedsNewToken(task))
         {
-            if (_cachedToken.HasValue && _cachedToken.Value.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(5))
+            lock (_tokenLock)
             {
-                return _cachedToken.Value.Token;
+                task = _tokenTask;
+                if (NeedsNewToken(task))
+                {
+                    _tokenTask = task = credential.GetTokenAsync(new TokenRequestContext([_armScope]), CancellationToken.None).AsTask();
+                }
             }
+        }
 
-            _cachedToken = await credential.GetTokenAsync(new TokenRequestContext([ArmScope]), ct);
-            return _cachedToken.Value.Token;
-        }
-        finally
-        {
-            _tokenLock.Release();
-        }
+        var token = await task!.WaitAsync(ct);
+        return token.Token;
     }
 
     async Task<T> GetArmJsonAsync<T>(string url, CancellationToken ct)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var parsedUri) ||
             !parsedUri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ||
-            !parsedUri.Host.Equals("management.azure.com", StringComparison.OrdinalIgnoreCase))
+            !parsedUri.Host.Equals(_armHost, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException($"Invalid ARM API URL. URL must be a valid https URL for management.azure.com");
+            throw new InvalidOperationException($"Invalid ARM API URL. URL must be a valid https URL for {_armHost}");
         }
 
         var bearer = await GetBearerTokenAsync(ct);
@@ -96,7 +102,7 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
 
     public async Task<string> DiscoverResourceGroupAsync(string subscriptionId, string appName, CancellationToken ct)
     {
-        if (!Regex.IsMatch(appName, @"^[a-zA-Z0-9\-]+$"))
+        if (!AppNameRegex().IsMatch(appName))
         {
             throw new ArgumentException($"Invalid app name format: {appName}. Only alphanumeric characters and hyphens are allowed.", nameof(appName));
         }
@@ -111,7 +117,7 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
             if (attempt > 0)
                 await Task.Delay(TimeSpan.FromSeconds(attempt * 2), ct);
 
-            string? nextUrl = $"{ArmBase}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resources?$filter={filter}&api-version=2021-04-01";
+            string? nextUrl = $"{_baseUrl}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resources?$filter={filter}&api-version=2021-04-01";
             while (nextUrl is not null)
             {
                 var page = await GetArmJsonAsync<ResourceListResponse>(nextUrl, ct);
@@ -133,21 +139,25 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
             $"Verify the app name and that your account has access.");
     }
 
+    [GeneratedRegex(@"(?i)/resourceGroups/+([^/]+)")]
+    private static partial Regex ResourceGroupRegex();
+
     internal static string ExtractResourceGroup(string resourceId)
     {
         ArgumentNullException.ThrowIfNull(resourceId);
-        var parts = resourceId.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        for (int i = 0; i < parts.Length - 1; i++)
+
+        var match = ResourceGroupRegex().Match(resourceId);
+        if (match.Success)
         {
-            if (parts[i].Equals("resourceGroups", StringComparison.OrdinalIgnoreCase))
-                return parts[i + 1];
+            return match.Groups[1].Value;
         }
+
         throw new InvalidOperationException($"Could not extract resource group from resource ID: {resourceId}");
     }
 
-    private static string BuildWorkflowBaseUrl(string subscriptionId, string resourceGroup, string appName, string workflowName)
+    private string BuildWorkflowBaseUrl(string subscriptionId, string resourceGroup, string appName, string workflowName)
     {
-        return $"{ArmBase}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resourceGroups/{Uri.EscapeDataString(resourceGroup)}" +
+        return $"{_baseUrl}/subscriptions/{Uri.EscapeDataString(subscriptionId)}/resourceGroups/{Uri.EscapeDataString(resourceGroup)}" +
                $"/providers/Microsoft.Web/sites/{Uri.EscapeDataString(appName)}" +
                $"/hostruntime/runtime/webhooks/workflow/api/management" +
                $"/workflows/{Uri.EscapeDataString(workflowName)}";
@@ -188,9 +198,9 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
         return GetPaginatedAsync<ActionListResponse, WorkflowAction>(url, ct);
     }
 
-    private static bool IsAllowedHost(string host)
+    private bool IsAllowedHost(string host)
     {
-        return host.Equals("management.azure.com", StringComparison.OrdinalIgnoreCase) ||
+        return host.Equals(_armHost, StringComparison.OrdinalIgnoreCase) ||
                host.EndsWith(".blob.core.windows.net", StringComparison.OrdinalIgnoreCase) ||
                host.EndsWith(".file.core.windows.net", StringComparison.OrdinalIgnoreCase);
     }
@@ -214,7 +224,7 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
             return await TryFetchAsync(link.Uri, null, ct);
         }
 
-        if (parsedUri.Host.Equals("management.azure.com", StringComparison.OrdinalIgnoreCase))
+        if (parsedUri.Host.Equals(_armHost, StringComparison.OrdinalIgnoreCase))
         {
             var bearer = await GetBearerTokenAsync(ct);
 
@@ -229,12 +239,45 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
 
     async Task<string?> TryFetchAsync(string uri, string? bearer, CancellationToken ct)
     {
+        if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsedUri) ||
+            parsedUri.Scheme != Uri.UriSchemeHttps ||
+            !IsAllowedHost(parsedUri.Host))
+        {
+            return null;
+        }
+
         using var req = new HttpRequestMessage(HttpMethod.Get, uri);
         if (bearer is not null)
+        {
+            if (!parsedUri.Host.Equals("management.azure.com", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
-        using var resp = await http.SendAsync(req, ct);
-        return resp.IsSuccessStatusCode
-            ? await resp.Content.ReadAsStringAsync(ct)
-            : null;
+        }
+
+        using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (!resp.IsSuccessStatusCode)
+            return null;
+
+        if (resp.Content.Headers.ContentLength > MaxInputSizeBytes)
+            return null;
+
+        await using var stream = await resp.Content.ReadAsStreamAsync(ct);
+        using var ms = new MemoryStream();
+        var buffer = new byte[8192];
+        int totalRead = 0;
+        int read;
+        while ((read = await stream.ReadAsync(buffer, 0, buffer.Length, ct)) > 0)
+        {
+            totalRead += read;
+            if (totalRead > MaxInputSizeBytes)
+                return null;
+            ms.Write(buffer, 0, read);
+        }
+
+        ms.Position = 0;
+        using var reader = new StreamReader(ms, System.Text.Encoding.UTF8);
+        return await reader.ReadToEndAsync(ct);
     }
 }

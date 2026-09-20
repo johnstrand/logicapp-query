@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Security.Cryptography;
 using System.Threading.Tasks;
 using LogicAppQuery;
 using Xunit;
@@ -222,18 +223,159 @@ public class RunCacheTests
     [Fact]
     public void ProtectContent_And_UnprotectContent_WorkCorrectly()
     {
-        var input = "test content with sensitive data";
-        var protectedContent = RunCache.ProtectContent(input);
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            var input = "test content with sensitive data";
+            var protectedContent = RunCache.ProtectContent(input, tempDir);
 
-        Assert.NotNull(protectedContent);
-        // On non-Windows platforms, it will fallback to plaintext.
-        // We ensure that protecting and then unprotecting returns the original text.
-        var unprotectedContent = RunCache.UnprotectContent(protectedContent);
-        Assert.Equal(input, unprotectedContent);
+            Assert.NotNull(protectedContent);
+            Assert.NotEqual(input, protectedContent);
 
-        // Verify handling of plaintext/legacy unencrypted data in UnprotectContent
-        var unencryptedLegacy = "{\"key\":\"value\"}";
-        var handledLegacy = RunCache.UnprotectContent(unencryptedLegacy);
-        Assert.Equal(unencryptedLegacy, handledLegacy);
+            var unprotectedContent = RunCache.UnprotectContent(protectedContent, tempDir);
+            Assert.Equal(input, unprotectedContent);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void UnprotectContent_UnencryptedPlaintext_ReturnsPlaintextOnNonWindows()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+            try
+            {
+                var legacyPlaintext = "{\"sensitive\":\"data\"}";
+                var result = RunCache.UnprotectContent(legacyPlaintext, tempDir);
+                Assert.Equal(legacyPlaintext, result);
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    [Fact]
+    public void GetOrCreateKey_CreatesAndPersistsKeyFile()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            var key1 = RunCache.GetOrCreateKey(tempDir);
+            Assert.NotNull(key1);
+            Assert.Equal(32, key1.Length);
+
+            var keyFilePath = Path.Combine(tempDir, "cache.key");
+            Assert.True(File.Exists(keyFilePath));
+
+            var key2 = RunCache.GetOrCreateKey(tempDir);
+            Assert.Equal(key1, key2);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void UnprotectContent_InvalidContent_ThrowsCryptographicExceptionOnWindows()
+    {
+        var invalidContent = "not_valid_base64_or_encrypted_data!";
+
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Throws<CryptographicException>(() => RunCache.UnprotectContent(invalidContent));
+        }
+        else
+        {
+            // On non-Windows, DPAPI is skipped and returns raw text.
+            Assert.Equal(invalidContent, RunCache.UnprotectContent(invalidContent));
+        }
+    }
+
+    [Fact]
+    public async Task DisposeAsync_DisposesUnderlyingConnection()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            var cache = await RunCache.LoadAsync("testApp", "testWorkflow", tempDir);
+
+            // Call DisposeAsync on RunCache
+            await cache.DisposeAsync();
+
+            // Verify that accessing the cache after disposal throws InvalidOperationException or ObjectDisposedException
+            await Assert.ThrowsAsync<InvalidOperationException>(() => cache.TryGetAsync("testRun"));
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void EnsureDirectoryPermissions_CreatesDirectoryWithRestrictedPermissions()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "test_perm_dir_" + Guid.NewGuid().ToString());
+        try
+        {
+            Assert.False(Directory.Exists(tempDir));
+            RunCache.EnsureDirectoryPermissions(tempDir);
+            Assert.True(Directory.Exists(tempDir));
+
+            if (!OperatingSystem.IsWindows())
+            {
+                var mode = File.GetUnixFileMode(tempDir);
+                var expected = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+                Assert.Equal(expected, mode);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void EnsureDirectoryPermissions_UpdatesExistingDirectoryPermissions()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "test_perm_dir_exist_" + Guid.NewGuid().ToString());
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+
+            if (!OperatingSystem.IsWindows())
+            {
+                // Set wide permissions first
+                File.SetUnixFileMode(tempDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                                             UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+                                             UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+            }
+
+            RunCache.EnsureDirectoryPermissions(tempDir);
+
+            if (!OperatingSystem.IsWindows())
+            {
+                var mode = File.GetUnixFileMode(tempDir);
+                var expected = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+                Assert.Equal(expected, mode);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
     }
 }
