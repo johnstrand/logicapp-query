@@ -50,7 +50,7 @@ internal sealed class RunCache : IAsyncDisposable
         var dir = directory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "LogicAppQuery");
-        Directory.CreateDirectory(dir);
+        EnsureDirectoryPermissions(dir);
 
         var dbPath = Path.Combine(dir, "LogicAppQuery.db");
         var connectionString = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
@@ -347,6 +347,28 @@ internal sealed class RunCache : IAsyncDisposable
     public ValueTask DisposeAsync()
     {
         return _connection.DisposeAsync();
+    }
+
+    internal static void EnsureDirectoryPermissions(string dir)
+    {
+        const UnixFileMode restrictedMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+
+        if (!Directory.Exists(dir))
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                Directory.CreateDirectory(dir, restrictedMode);
+            }
+            else
+            {
+                Directory.CreateDirectory(dir);
+            }
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(dir, restrictedMode);
+        }
     }
 
     internal static string Sanitize(string name)
