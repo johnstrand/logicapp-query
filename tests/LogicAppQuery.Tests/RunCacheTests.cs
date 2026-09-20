@@ -223,14 +223,66 @@ public class RunCacheTests
     [Fact]
     public void ProtectContent_And_UnprotectContent_WorkCorrectly()
     {
-        var input = "test content with sensitive data";
-        var protectedContent = RunCache.ProtectContent(input);
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            var input = "test content with sensitive data";
+            var protectedContent = RunCache.ProtectContent(input, tempDir);
 
-        Assert.NotNull(protectedContent);
-        // On non-Windows platforms, it will fallback to plaintext.
-        // We ensure that protecting and then unprotecting returns the original text.
-        var unprotectedContent = RunCache.UnprotectContent(protectedContent);
-        Assert.Equal(input, unprotectedContent);
+            Assert.NotNull(protectedContent);
+            Assert.NotEqual(input, protectedContent);
+
+            var unprotectedContent = RunCache.UnprotectContent(protectedContent, tempDir);
+            Assert.Equal(input, unprotectedContent);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void UnprotectContent_UnencryptedPlaintext_ReturnsPlaintextOnNonWindows()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+            try
+            {
+                var legacyPlaintext = "{\"sensitive\":\"data\"}";
+                var result = RunCache.UnprotectContent(legacyPlaintext, tempDir);
+                Assert.Equal(legacyPlaintext, result);
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    [Fact]
+    public void GetOrCreateKey_CreatesAndPersistsKeyFile()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            var key1 = RunCache.GetOrCreateKey(tempDir);
+            Assert.NotNull(key1);
+            Assert.Equal(32, key1.Length);
+
+            var keyFilePath = Path.Combine(tempDir, "cache.key");
+            Assert.True(File.Exists(keyFilePath));
+
+            var key2 = RunCache.GetOrCreateKey(tempDir);
+            Assert.Equal(key1, key2);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
     }
 
     [Fact]
