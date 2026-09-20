@@ -679,6 +679,36 @@ public class ArmClientTests
         Assert.DoesNotContain(new string('A', 257), ex.Message);
     }
 
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_Unauthorized_ThrowsUnauthorizedAccessException()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized));
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None));
+
+        Assert.Contains("Authentication failed (401) calling ARM API", ex.Message);
+        Assert.Contains("az login", ex.Message);
+    }
+
+    [Fact]
+    public async Task DiscoverResourceGroupAsync_Forbidden_ThrowsUnauthorizedAccessException()
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.Forbidden));
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            client.DiscoverResourceGroupAsync("sub-id", "test-app", CancellationToken.None));
+
+        Assert.Contains("Access denied (403) calling ARM API", ex.Message);
+        Assert.Contains("Reader role", ex.Message);
+    }
+
     private class MockHttpMessageHandler : System.Net.Http.HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage>? _responseFactory;
