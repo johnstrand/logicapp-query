@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 
 namespace LogicAppQuery;
 
-internal sealed class ArmClient(TokenCredential credential, HttpClient http) : IArmClient
+internal sealed partial class ArmClient(TokenCredential credential, HttpClient http) : IArmClient
 {
     const string ArmScope = "https://management.azure.com/.default";
     const string ArmBase = "https://management.azure.com";
@@ -135,40 +135,17 @@ internal sealed class ArmClient(TokenCredential credential, HttpClient http) : I
             $"Verify the app name and that your account has access.");
     }
 
+    [GeneratedRegex(@"(?i)/resourceGroups/+([^/]+)")]
+    private static partial Regex ResourceGroupRegex();
+
     internal static string ExtractResourceGroup(string resourceId)
     {
         ArgumentNullException.ThrowIfNull(resourceId);
 
-        ReadOnlySpan<char> span = resourceId.AsSpan();
-        bool foundResourceGroupSegment = false;
-
-        while (!span.IsEmpty)
+        var match = ResourceGroupRegex().Match(resourceId);
+        if (match.Success)
         {
-            int nextSlash = span.IndexOf('/');
-            ReadOnlySpan<char> segment;
-            if (nextSlash < 0)
-            {
-                segment = span;
-                span = default;
-            }
-            else
-            {
-                segment = span[..nextSlash];
-                span = span[(nextSlash + 1)..];
-            }
-
-            if (segment.IsEmpty)
-                continue;
-
-            if (foundResourceGroupSegment)
-            {
-                return segment.ToString();
-            }
-
-            if (segment.Equals("resourceGroups", StringComparison.OrdinalIgnoreCase))
-            {
-                foundResourceGroupSegment = true;
-            }
+            return match.Groups[1].Value;
         }
 
         throw new InvalidOperationException($"Could not extract resource group from resource ID: {resourceId}");
