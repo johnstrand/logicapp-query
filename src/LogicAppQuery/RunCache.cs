@@ -23,6 +23,13 @@ internal sealed class RunCache : IAsyncDisposable
     static readonly HashSet<string> TerminalStates =
         new(StringComparer.OrdinalIgnoreCase) { "Succeeded", "Failed", "Cancelled", "Skipped", "TimedOut", "Aborted" };
 
+    private static readonly System.Buffers.SearchValues<char> InvalidFileNameChars =
+        System.Buffers.SearchValues.Create(
+            Path.GetInvalidFileNameChars()
+                .Concat(new[] { '.', '/', '\\' })
+                .Distinct()
+                .ToArray());
+
     readonly SqliteConnection _connection;
     readonly string _appName;
     readonly string _workflowName;
@@ -342,25 +349,25 @@ internal sealed class RunCache : IAsyncDisposable
         return _connection.DisposeAsync();
     }
 
-    private static readonly System.Buffers.SearchValues<char> InvalidFileNameSearchValues =
-        System.Buffers.SearchValues.Create(
-            Path.GetInvalidFileNameChars().Concat(new[] { '.', '/', '\\' }).Distinct().ToArray());
-
     internal static string Sanitize(string name)
     {
-        if (name == null) throw new ArgumentNullException(nameof(name));
+        ArgumentNullException.ThrowIfNull(name);
 
-        if (name.AsSpan().IndexOfAny(InvalidFileNameSearchValues) < 0)
+        int firstInvalidIndex = name.AsSpan().IndexOfAny(InvalidFileNameChars);
+        if (firstInvalidIndex < 0)
         {
             return name;
         }
 
-        return string.Create(name.Length, name, (span, state) =>
+        return string.Create(name.Length, name, (span, source) =>
         {
-            for (int i = 0; i < state.Length; i++)
+            source.CopyTo(span);
+            for (int i = 0; i < span.Length; i++)
             {
-                char c = state[i];
-                span[i] = InvalidFileNameSearchValues.Contains(c) ? '_' : c;
+                if (InvalidFileNameChars.Contains(span[i]))
+                {
+                    span[i] = '_';
+                }
             }
         });
     }
