@@ -322,4 +322,60 @@ public class RunCacheTests
                 Directory.Delete(tempDir, true);
         }
     }
+
+    [Fact]
+    public void EnsureDirectoryPermissions_CreatesDirectoryWithRestrictedPermissions()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "test_perm_dir_" + Guid.NewGuid().ToString());
+        try
+        {
+            Assert.False(Directory.Exists(tempDir));
+            RunCache.EnsureDirectoryPermissions(tempDir);
+            Assert.True(Directory.Exists(tempDir));
+
+            if (!OperatingSystem.IsWindows())
+            {
+                var mode = File.GetUnixFileMode(tempDir);
+                var expected = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+                Assert.Equal(expected, mode);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void EnsureDirectoryPermissions_UpdatesExistingDirectoryPermissions()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "test_perm_dir_exist_" + Guid.NewGuid().ToString());
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+
+            if (!OperatingSystem.IsWindows())
+            {
+                // Set wide permissions first
+                File.SetUnixFileMode(tempDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                                             UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+                                             UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+            }
+
+            RunCache.EnsureDirectoryPermissions(tempDir);
+
+            if (!OperatingSystem.IsWindows())
+            {
+                var mode = File.GetUnixFileMode(tempDir);
+                var expected = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+                Assert.Equal(expected, mode);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
 }
