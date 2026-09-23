@@ -322,6 +322,119 @@ public class ArmClientTests
     }
 
     [Fact]
+    public async Task GetArmJsonAsync_InvalidUrl_RelativeUrl_ThrowsInvalidOperationException()
+    {
+        // Arrange: nextLink is a relative URL
+        var handler = new MaliciousNextLinkHttpMessageHandler("/subscriptions/sub-id/resourceGroups");
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.DiscoverResourceGroupAsync("sub-id", "my-app", CancellationToken.None));
+
+        Assert.Contains("Invalid ARM API URL. URL must be a valid https URL for management.azure.com", ex.Message);
+    }
+
+    [Fact]
+    public async Task GetArmJsonAsync_InvalidUrl_NonHttpsScheme_ThrowsInvalidOperationException()
+    {
+        // Arrange: nextLink is HTTP scheme instead of HTTPS
+        var handler = new MaliciousNextLinkHttpMessageHandler("http://management.azure.com/subscriptions/sub-id/resources");
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.DiscoverResourceGroupAsync("sub-id", "my-app", CancellationToken.None));
+
+        Assert.Contains("Invalid ARM API URL. URL must be a valid https URL for management.azure.com", ex.Message);
+    }
+
+    [Fact]
+    public async Task GetArmJsonAsync_InvalidUrl_HostMismatch_ThrowsInvalidOperationException()
+    {
+        // Arrange: nextLink is on an unauthorized host
+        var handler = new MaliciousNextLinkHttpMessageHandler("https://attacker.com/subscriptions/sub-id/resources");
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.DiscoverResourceGroupAsync("sub-id", "my-app", CancellationToken.None));
+
+        Assert.Contains("Invalid ARM API URL. URL must be a valid https URL for management.azure.com", ex.Message);
+    }
+
+    [Fact]
+    public async Task GetArmJsonAsync_InvalidUrl_CustomBaseUrlHostMismatch_ThrowsInvalidOperationException()
+    {
+        // Arrange: Custom base URL is US Gov cloud, but nextLink attempts to call public Azure management endpoint
+        var handler = new MaliciousNextLinkHttpMessageHandler("https://management.azure.com/subscriptions/sub-id/resources");
+        var customBaseUrl = "https://management.usgovcloudapi.net";
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler), customBaseUrl);
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.DiscoverResourceGroupAsync("sub-id", "my-app", CancellationToken.None));
+
+        Assert.Contains("Invalid ARM API URL. URL must be a valid https URL for management.usgovcloudapi.net", ex.Message);
+    }
+
+    [Fact]
+    public async Task ListRunsAsync_InvalidNextLinkUrl_ThrowsInvalidOperationException()
+    {
+        // Arrange: First page returns nextLink pointing to http (non-https)
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var page1 = """
+            {
+                "value": [{ "name": "run1", "properties": { "status": "Succeeded", "startTime": "2023-01-01T00:00:00Z" } }],
+                "nextLink": "http://management.azure.com/runs-next-page"
+            }
+            """;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(page1) };
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var run in client.ListRunsAsync("sub-id", "rg", "app", "flow", null, null, CancellationToken.None))
+            {
+                // Enumerating second page should throw
+            }
+        });
+
+        Assert.Contains("Invalid ARM API URL. URL must be a valid https URL for management.azure.com", ex.Message);
+    }
+
+    [Fact]
+    public async Task ListActionsAsync_InvalidNextLinkUrl_ThrowsInvalidOperationException()
+    {
+        // Arrange: First page returns nextLink pointing to non-absolute relative path
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var page1 = """
+            {
+                "value": [{ "name": "Action1", "properties": { "status": "Succeeded" } }],
+                "nextLink": "relative/path/to/actions"
+            }
+            """;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(page1) };
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var action in client.ListActionsAsync("sub-id", "rg", "app", "flow", "run1", CancellationToken.None))
+            {
+                // Enumerating second page should throw
+            }
+        });
+
+        Assert.Contains("Invalid ARM API URL. URL must be a valid https URL for management.azure.com", ex.Message);
+    }
+
+    [Fact]
     public async Task DiscoverResourceGroupAsync_SSRFBypassAttempt_ThrowsInvalidOperationException()
     {
         // Arrange
