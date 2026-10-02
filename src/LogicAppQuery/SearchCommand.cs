@@ -14,26 +14,21 @@ internal partial class SearchCommand(IArmClient armClient, string? cacheDirector
     private readonly IAnsiConsole _console = ansiConsole ?? AnsiConsole.Console;
 
     public async Task ExecuteAsync(
-        string subscriptionId,
-        string appName,
-        string workflowName,
-        string searchTerm,
-        DateTimeOffset? start,
-        DateTimeOffset? end,
-        CancellationToken ct)
+        SearchOptions options,
+        CancellationToken ct = default)
     {
-        _console.MarkupLine($"[bold]App:[/]      [cyan]{Markup.Escape(StripAnsiEscapeSequences(appName))}[/]");
-        _console.MarkupLine($"[bold]Workflow:[/] [cyan]{Markup.Escape(StripAnsiEscapeSequences(workflowName))}[/]");
-        _console.MarkupLine($"[bold]Search:[/]   [yellow]{Markup.Escape(StripAnsiEscapeSequences(searchTerm))}[/]");
-        if (start.HasValue) _console.MarkupLine($"[bold]From:[/]     {start.Value.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC");
-        if (end.HasValue)   _console.MarkupLine($"[bold]To:[/]       {end.Value.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC");
+        _console.MarkupLine($"[bold]App:[/]      [cyan]{Markup.Escape(StripAnsiEscapeSequences(options.AppName))}[/]");
+        _console.MarkupLine($"[bold]Workflow:[/] [cyan]{Markup.Escape(StripAnsiEscapeSequences(options.WorkflowName))}[/]");
+        _console.MarkupLine($"[bold]Search:[/]   [yellow]{Markup.Escape(StripAnsiEscapeSequences(options.SearchTerm))}[/]");
+        if (options.Start.HasValue) _console.MarkupLine($"[bold]From:[/]     {options.Start.Value.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC");
+        if (options.End.HasValue)   _console.MarkupLine($"[bold]To:[/]       {options.End.Value.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC");
         _console.WriteLine();
 
         _console.Markup("[grey]Discovering resource group...[/] ");
         string resourceGroup;
         try
         {
-            resourceGroup = await armClient.DiscoverResourceGroupAsync(subscriptionId, appName, ct);
+            resourceGroup = await armClient.DiscoverResourceGroupAsync(options.SubscriptionId, options.AppName, ct);
         }
         catch (Exception ex)
         {
@@ -44,25 +39,25 @@ internal partial class SearchCommand(IArmClient armClient, string? cacheDirector
         _console.MarkupLine($"[green]{Markup.Escape(StripAnsiEscapeSequences(resourceGroup))}[/]");
         _console.WriteLine();
 
-        await using var cache = await RunCache.LoadAsync(appName, workflowName, cacheDirectory);
+        await using var cache = await RunCache.LoadAsync(options.AppName, options.WorkflowName, cacheDirectory);
 
         var state = new SearchState
         {
             Cache = cache,
-            SubscriptionId = subscriptionId,
+            SubscriptionId = options.SubscriptionId,
             ResourceGroup = resourceGroup,
-            AppName = appName,
-            WorkflowName = workflowName,
-            SearchTerm = searchTerm
+            AppName = options.AppName,
+            WorkflowName = options.WorkflowName,
+            SearchTerm = options.SearchTerm
         };
 
         await _console.Status()
             .Spinner(Spinner.Known.Dots)
             .StartAsync("Starting...", async ctx =>
             {
-                var options = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount * 2, CancellationToken = ct };
+                var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount * 2, CancellationToken = ct };
                 await Parallel.ForEachAsync(armClient.ListRunsAsync(
-                    subscriptionId, resourceGroup, appName, workflowName, start, end, ct), options, async (run, token) =>
+                    options.SubscriptionId, resourceGroup, options.AppName, options.WorkflowName, options.Start, options.End, ct), parallelOptions, async (run, token) =>
                 {
                     await ProcessRunAsync(run, state, ctx, token);
                 });

@@ -177,7 +177,7 @@ public class SearchCommandTests
         // Act & Assert
         // We expect it to write the error to console and return without throwing
         var ex = await Record.ExceptionAsync(() => command.ExecuteAsync(
-            "subId", "appName", "workflowName", "search", null, null, CancellationToken.None));
+            new SearchOptions("subId", "appName", "workflowName", "search"), CancellationToken.None));
 
         Assert.Null(ex); // Ensures it returns gracefully and doesn't crash
         Assert.Contains("failed", testConsole.Output);
@@ -355,7 +355,7 @@ public class SearchCommandTests
             testConsole.Profile.Capabilities.Interactive = false;
             var command = new SearchCommand(fakeClient, cacheDirectory: tempDir, ansiConsole: testConsole);
 
-            await command.ExecuteAsync("subId", "appName", "workflowName", "secretsearchTerm", null, null, CancellationToken.None);
+            await command.ExecuteAsync(new SearchOptions("subId", "appName", "workflowName", "secretsearchTerm"), CancellationToken.None);
 
             var output = testConsole.Output;
             Assert.Contains("match(es)", output);
@@ -425,7 +425,7 @@ public class SearchCommandTests
             testConsole.Profile.Capabilities.Interactive = false;
             var command = new SearchCommand(fakeClient, cacheDirectory: tempDir, ansiConsole: testConsole);
 
-            await command.ExecuteAsync("subId", "appName", "workflowName", "fallback_search_term", null, null, CancellationToken.None);
+            await command.ExecuteAsync(new SearchOptions("subId", "appName", "workflowName", "fallback_search_term"), CancellationToken.None);
 
             var output = testConsole.Output;
             Assert.Contains("Failed to fetch content link", output);

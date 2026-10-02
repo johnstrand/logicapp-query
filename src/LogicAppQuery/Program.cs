@@ -82,7 +82,8 @@ root.SetAction(async (ParseResult result, CancellationToken ct) =>
 
     try
     {
-        await command.ExecuteAsync(subscription, app, workflow, search, start, end, ct);
+        var searchOptions = new SearchOptions(subscription, app, workflow, search, start, end);
+        await command.ExecuteAsync(searchOptions, ct);
         return 0;
     }
     catch (OperationCanceledException)
