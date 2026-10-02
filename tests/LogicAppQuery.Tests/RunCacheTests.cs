@@ -378,4 +378,41 @@ public class RunCacheTests
                 Directory.Delete(tempDir, true);
         }
     }
+
+    [Fact]
+    public async Task ConcurrentSetAsyncAndTryGetAsync_ExecutesCorrectlyWithoutErrors()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "test_concurrent_runcache_" + Guid.NewGuid().ToString());
+        try
+        {
+            await using var cache = await RunCache.LoadAsync("testApp", "testWorkflow", tempDir);
+
+            const int itemCounter = 50;
+            var payload = new string('x', 2000); // 2KB payload per item to make encryption work realistic
+
+            var tasks = new System.Collections.Generic.List<Task>();
+
+            for (int i = 0; i < itemCounter; i++)
+            {
+                var index = i;
+                tasks.Add(Task.Run(async () =>
+                {
+                    var run = new CachedRun("Succeeded", DateTimeOffset.UtcNow, $"{payload}_{index}");
+                    await cache.SetAsync($"run_{index}", run);
+
+                    var retrieved = await cache.TryGetAsync($"run_{index}");
+                    Assert.NotNull(retrieved);
+                    Assert.Equal($"{payload}_{index}", retrieved.Content);
+                }));
+            }
+
+            await Task.WhenAll(tasks);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
 }
