@@ -20,7 +20,8 @@ internal partial class SearchCommand(IArmClient armClient, string? cacheDirector
         string searchTerm,
         DateTimeOffset? start,
         DateTimeOffset? end,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool noCache = false)
     {
         _console.MarkupLine($"[bold]App:[/]      [cyan]{Markup.Escape(StripAnsiEscapeSequences(appName))}[/]");
         _console.MarkupLine($"[bold]Workflow:[/] [cyan]{Markup.Escape(StripAnsiEscapeSequences(workflowName))}[/]");
@@ -44,7 +45,7 @@ internal partial class SearchCommand(IArmClient armClient, string? cacheDirector
         _console.MarkupLine($"[green]{Markup.Escape(StripAnsiEscapeSequences(resourceGroup))}[/]");
         _console.WriteLine();
 
-        await using var cache = await RunCache.LoadAsync(appName, workflowName, cacheDirectory);
+        await using var cache = noCache ? null : await RunCache.LoadAsync(appName, workflowName, cacheDirectory);
 
         var state = new SearchState
         {
@@ -91,7 +92,7 @@ internal partial class SearchCommand(IArmClient armClient, string? cacheDirector
         var isTerminal = RunCache.IsTerminal(run.Properties.Status);
         string? content;
 
-        var cached = isTerminal ? await state.Cache.TryGetAsync(run.Name) : null;
+        var cached = isTerminal && state.Cache is not null ? await state.Cache.TryGetAsync(run.Name) : null;
 
         if (cached is not null)
         {
@@ -111,7 +112,7 @@ internal partial class SearchCommand(IArmClient armClient, string? cacheDirector
 
             Interlocked.Increment(ref state.FetchCount);
 
-            if (isTerminal)
+            if (isTerminal && state.Cache is not null)
                 await state.Cache.SetAsync(run.Name, new CachedRun(
                     run.Properties.Status, run.Properties.StartTime, content));
         }
@@ -234,7 +235,7 @@ internal partial class SearchCommand(IArmClient armClient, string? cacheDirector
         public int FetchCount;
         public int CacheHits;
 
-        public required RunCache Cache { get; init; }
+        public required RunCache? Cache { get; init; }
         public required string SubscriptionId { get; init; }
         public required string ResourceGroup { get; init; }
         public required string AppName { get; init; }

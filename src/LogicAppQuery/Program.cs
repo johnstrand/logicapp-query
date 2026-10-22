@@ -34,12 +34,17 @@ var startOpt = new Option<DateTimeOffset?>("--start")
 
 var endOpt = new Option<DateTimeOffset?>("--end")
 {
-    Description = "Filter: include runs starting on or before this time (ISO 8601, e.g. 2024-12-31)"
+    Description = "Filter: include runs starting on or before this time (ISO 8601; date-only values use 23:59:59.9999)"
 };
 
 var tenantOpt = new Option<string?>("--tenant", "-t")
 {
     Description = "Azure tenant ID (required when the subscription belongs to a non-default tenant)"
+};
+
+var noCacheOpt = new Option<bool>("--no-cache")
+{
+    Description = "Fetch directly from Azure without reading or writing the local cache"
 };
 
 var root = new RootCommand("Search Logic App Standard workflow run trigger inputs for a given term.");
@@ -50,6 +55,7 @@ root.Add(searchOpt);
 root.Add(startOpt);
 root.Add(endOpt);
 root.Add(tenantOpt);
+root.Add(noCacheOpt);
 
 root.SetAction(async (ParseResult result, CancellationToken ct) =>
 {
@@ -58,8 +64,10 @@ root.SetAction(async (ParseResult result, CancellationToken ct) =>
     var workflow     = result.GetRequiredValue(workflowOpt);
     var search       = result.GetRequiredValue(searchOpt);
     var start        = result.GetValue(startOpt);
-    var end          = result.GetValue(endOpt);
+    var end          = DateFilters.NormalizeEndDate(
+        result.GetValue(endOpt), result.GetResult(endOpt)?.Tokens.Select(token => token.Value).FirstOrDefault());
     var tenant       = result.GetValue(tenantOpt);
+    var noCache      = result.GetValue(noCacheOpt);
 
     // Use AzureCliCredential first so 'az login' is always preferred over environment
     // variables or Managed Identity (which DefaultAzureCredential would try first).
@@ -91,7 +99,7 @@ root.SetAction(async (ParseResult result, CancellationToken ct) =>
                 () => Console.KeyAvailable ? Console.ReadKey(intercept: true).Key : null);
         }
 
-        await command.ExecuteAsync(subscription, app, workflow, search, start, end, cancellation.Token);
+        await command.ExecuteAsync(subscription, app, workflow, search, start, end, cancellation.Token, noCache);
         return 0;
     }
     catch (OperationCanceledException)

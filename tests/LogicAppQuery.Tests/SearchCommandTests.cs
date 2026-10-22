@@ -421,6 +421,62 @@ public class SearchCommandTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_NoCache_IgnoresAndPreservesExistingCache()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var cache = await RunCache.LoadAsync("appName", "workflowName", tempDir))
+            {
+                await cache.SetAsync("run1", new CachedRun("Succeeded", DateTimeOffset.UtcNow, "stale payload"));
+            }
+
+            var console = new TestConsole();
+            console.Profile.Capabilities.Interactive = false;
+            var command = new SearchCommand(new FakeArmClient(), tempDir, console);
+            await command.ExecuteAsync("subId", "appName", "workflowName", "secretsearchTerm",
+                null, null, CancellationToken.None, noCache: true);
+
+            Assert.Contains("Found 1 match(es)", console.Output);
+            Assert.Contains("2 fetched, 0 from cache", console.Output);
+            await using var existingCache = await RunCache.LoadAsync("appName", "workflowName", tempDir);
+            Assert.Equal("stale payload", (await existingCache.TryGetAsync("run1"))?.Content);
+            Assert.Null(await existingCache.TryGetAsync("run2"));
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NoCache_DoesNotCreateCacheDirectory()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            var console = new TestConsole();
+            console.Profile.Capabilities.Interactive = false;
+            var command = new SearchCommand(new FakeArmClient(), tempDir, console);
+
+            await command.ExecuteAsync("subId", "appName", "workflowName", "secretsearchTerm",
+                null, null, CancellationToken.None, noCache: true);
+
+            Assert.Contains("Found 1 match(es)", console.Output);
+            Assert.Contains("2 fetched, 0 from cache", console.Output);
+            Assert.False(Directory.Exists(tempDir));
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public async Task BuildRunContentAsync_RunWithoutPayload_ReturnsEmptyContent()
     {
         var client = new FakeArmClient();

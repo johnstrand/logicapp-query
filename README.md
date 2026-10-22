@@ -36,8 +36,9 @@ Press **Esc** or **Ctrl+C** to cancel a search, including in-progress requests a
 | `--workflow` | `-w` | **Yes** | The name of the specific workflow to search within. |
 | `--search` | `-q` | **Yes** | The search term to find in the trigger and action inputs/outputs. |
 | `--start` | | No | Filter: include runs starting on or after this time (ISO 8601, e.g. `2024-01-01`). |
-| `--end` | | No | Filter: include runs starting on or before this time (ISO 8601, e.g. `2024-12-31`). |
+| `--end` | | No | Filter: include runs starting on or before this time. A date-only value such as `2024-12-31` uses `23:59:59.9999` on that date; explicit ISO 8601 timestamps are unchanged. |
 | `--tenant` | `-t` | No | Azure tenant ID (required when the subscription belongs to a non-default tenant). |
+| `--no-cache` | | No | Fetch directly from Azure without reading or writing the local cache. |
 
 ### Example
 
@@ -60,5 +61,7 @@ To optimize performance and reduce the number of requests made to the Azure ARM 
 When a workflow run has reached a **terminal state** (e.g., `Succeeded`, `Failed`, `Cancelled`, `Skipped`, `TimedOut`, `Aborted`), its content is cached locally. On subsequent searches for the same Logic App and Workflow, the tool will retrieve the payload from the cache instead of fetching it from Azure again, significantly speeding up the search process.
 
 Search progress and the final summary show run counts as `xxx fetched, xxx from cache`. Unreadable runs are counted separately rather than as successfully fetched.
+
+Add `--no-cache` to bypass the cache for a search. Existing cache entries are left unchanged, and no cache database is opened or created.
 
 Caches are stored in a centralized SQLite database (`LogicAppQuery.db`) located in your local application data folder (`%LOCALAPPDATA%\LogicAppQuery` on Windows or `~/.local/share/LogicAppQuery` on Linux/macOS). Legacy JSON cache files from previous versions are automatically migrated to this database upon their first access.
