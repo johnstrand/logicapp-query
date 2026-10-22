@@ -140,6 +140,76 @@ public class ArmClientTests
         Assert.Empty(handler.Requests);
     }
 
+    [Theory]
+    [InlineData("https://my-app.azurewebsites.net/runtime/content?sig=test", true)]
+    [InlineData("https://MY-APP.azurewebsites.net/runtime/content?sig=test", true)]
+    [InlineData("https://my-app.azurewebsites.net/runtime/content", true)]
+    [InlineData("https://other-app.azurewebsites.net/runtime/content?sig=test", false)]
+    [InlineData("https://my-app.azurewebsites.net.attacker.com/content?sig=test", false)]
+    [InlineData("https://my-app.scm.azurewebsites.net/content?sig=test", false)]
+    [InlineData("http://my-app.azurewebsites.net/runtime/content?sig=test", false)]
+    public async Task FetchContentAsync_RuntimeLink_OnlyAllowsDiscoveredAppWithoutBearer(string uri, bool allowed)
+    {
+        var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent(req.RequestUri?.Host == "management.azure.com"
+                ? """{"value":[{"id":"/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Web/sites/my-app","kind":"workflowapp"}]}"""
+                : "trigger payload")
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        Assert.Null(await client.FetchContentAsync(new ContentLink(uri, 100), CancellationToken.None));
+        Assert.Empty(handler.Requests);
+
+        await client.DiscoverResourceGroupAsync("sub", "my-app", CancellationToken.None);
+        var result = await client.FetchContentAsync(new ContentLink(uri, 100), CancellationToken.None);
+
+        Assert.Equal(allowed ? "trigger payload" : null, result);
+        Assert.Equal(allowed ? 2 : 1, handler.Requests.Count);
+        if (allowed)
+            Assert.Null(handler.Requests[1].Headers.Authorization);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_HttpTriggerRuntimeLink_FindsPayloadWithoutUnreadableWarning()
+    {
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var uri = req.RequestUri!;
+            var content = uri.Host == "my-app.azurewebsites.net"
+                ? """{"body":{"id":"search-target"}}"""
+                : uri.AbsolutePath.EndsWith("/actions")
+                    ? """{"value":[]}"""
+                    : uri.AbsolutePath.EndsWith("/runs")
+                        ? """
+                          {"value":[{"name":"run1","properties":{"status":"Succeeded","startTime":"2026-10-22T08:00:00Z",
+                          "trigger":{"outputsLink":{"uri":"https://my-app.azurewebsites.net/runtime/content?sig=test","contentSize":31}}}}]}
+                          """
+                        : """{"value":[{"id":"/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Web/sites/my-app","kind":"workflowapp"}]}""";
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(content) };
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var console = new Spectre.Console.Testing.TestConsole();
+        console.Profile.Capabilities.Interactive = false;
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            var command = new SearchCommand(client, tempDir, console);
+            await command.ExecuteAsync("sub", "my-app", "workflow", "search-target", null, null, CancellationToken.None);
+
+            Assert.Contains("Found 1 match(es)", console.Output);
+            Assert.DoesNotContain("Could not read content", console.Output);
+            var runtimeRequest = Assert.Single(handler.Requests, req => req.RequestUri?.Host == "my-app.azurewebsites.net");
+            Assert.Null(runtimeRequest.Headers.Authorization);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
     [Fact]
     public async Task FetchContentAsync_ContentLengthHeaderExceedsMax_ReturnsNull()
     {

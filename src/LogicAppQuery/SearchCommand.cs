@@ -35,7 +35,7 @@ internal partial class SearchCommand(IArmClient armClient, string? cacheDirector
         {
             resourceGroup = await armClient.DiscoverResourceGroupAsync(subscriptionId, appName, ct);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             _console.MarkupLine("[red]failed[/]");
             _console.MarkupLine($"[red]Error:[/] {Markup.Escape(StripAnsiEscapeSequences(ex.Message))}");
@@ -73,8 +73,7 @@ internal partial class SearchCommand(IArmClient armClient, string? cacheDirector
             state.MatchCount > 0
                 ? $"Searched [bold]{state.RunCount}[/] run(s). Found [bold green]{state.MatchCount}[/] match(es)."
                 : $"Searched [bold]{state.RunCount}[/] run(s). [yellow]No matches found.[/]");
-        if (state.CacheHits > 0)
-            _console.MarkupLine($"[grey]{state.CacheHits} run(s) loaded from cache.[/]");
+        _console.MarkupLine($"[grey]{state.FetchCount} fetched, {state.CacheHits} from cache.[/]");
         if (state.FetchFailCount > 0)
             _console.MarkupLine($"[yellow]Warning:[/] Could not read content for {state.FetchFailCount} run(s) — they were skipped.");
     }
@@ -85,7 +84,7 @@ internal partial class SearchCommand(IArmClient armClient, string? cacheDirector
         ctx.Status(
             $"{run.Properties.StartTime.UtcDateTime:yyyy-MM-dd}  |  " +
             $"Searched {state.RunCount} run(s), {state.MatchCount} match(es)" +
-            (state.CacheHits > 0 ? $" ({state.CacheHits} from cache)" : "") +
+            $" ({state.FetchCount} fetched, {state.CacheHits} from cache)" +
             (state.FetchFailCount > 0 ? $", {state.FetchFailCount} unreadable" : "") +
             "...");
 
@@ -109,6 +108,8 @@ internal partial class SearchCommand(IArmClient armClient, string? cacheDirector
                 Interlocked.Increment(ref state.FetchFailCount);
                 return; // `continue` in `foreach` becomes `return` in `ForEachAsync` delegate
             }
+
+            Interlocked.Increment(ref state.FetchCount);
 
             if (isTerminal)
                 await state.Cache.SetAsync(run.Name, new CachedRun(
@@ -188,13 +189,14 @@ internal partial class SearchCommand(IArmClient armClient, string? cacheDirector
         }
 
         var results = await Task.WhenAll(tasks);
-        var parts = new List<string>();
-        foreach (var res in results)
-        {
-            if (res is not null) parts.Add(res);
-        }
+        var parts = results
+            .Where(result => !string.IsNullOrEmpty(result))
+            .ToList();
 
-        return parts.Count > 0 ? string.Join("\n", parts) : null;
+        if (parts.Count > 0)
+            return string.Join("\n", parts);
+
+        return results.All(result => result is not null) ? string.Empty : null;
     }
 
     async Task<string?> FetchContentPartAsync(
@@ -209,7 +211,7 @@ internal partial class SearchCommand(IArmClient armClient, string? cacheDirector
                 var fetched = await armClient.FetchContentAsync(link, ct);
                 if (fetched is not null) { return fetched; }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
                 lock (_consoleLock)
                 {
@@ -221,7 +223,7 @@ internal partial class SearchCommand(IArmClient armClient, string? cacheDirector
         if (inlined is { ValueKind: not JsonValueKind.Undefined } el)
             return el.GetRawText();
 
-        return null;
+        return link is null ? string.Empty : null;
     }
 
     private sealed class SearchState
@@ -229,6 +231,7 @@ internal partial class SearchCommand(IArmClient armClient, string? cacheDirector
         public int RunCount;
         public int MatchCount;
         public int FetchFailCount;
+        public int FetchCount;
         public int CacheHits;
 
         public required RunCache Cache { get; init; }
@@ -281,4 +284,3 @@ internal partial class SearchCommand(IArmClient armClient, string? cacheDirector
         return StripAnsiEscapeSequences(snippet);
     }
 }
-

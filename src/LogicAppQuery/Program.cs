@@ -79,10 +79,19 @@ root.SetAction(async (ParseResult result, CancellationToken ct) =>
     using var http = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false });
     var armClient  = new ArmClient(credential, http);
     var command    = new SearchCommand(armClient);
+    using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+    var keyboardTask = Task.CompletedTask;
 
     try
     {
-        await command.ExecuteAsync(subscription, app, workflow, search, start, end, ct);
+        if (!Console.IsInputRedirected)
+        {
+            AnsiConsole.MarkupLine("[grey]Press Esc or Ctrl+C to cancel.[/]");
+            keyboardTask = SearchCancellation.WatchForEscapeAsync(cancellation,
+                () => Console.KeyAvailable ? Console.ReadKey(intercept: true).Key : null);
+        }
+
+        await command.ExecuteAsync(subscription, app, workflow, search, start, end, cancellation.Token);
         return 0;
     }
     catch (OperationCanceledException)
@@ -95,6 +104,11 @@ root.SetAction(async (ParseResult result, CancellationToken ct) =>
         AnsiConsole.MarkupLine($"[red]Error:[/] {Markup.Escape(ex.Message)}");
         AnsiConsole.WriteException(ex, ExceptionFormats.ShortenEverything);
         return 1;
+    }
+    finally
+    {
+        cancellation.Cancel();
+        await keyboardTask;
     }
 });
 

@@ -13,6 +13,164 @@ namespace LogicAppQuery.Tests;
 
 public class ArmClientAdditionalTests
 {
+    [Theory]
+    [InlineData("discovery")]
+    [InlineData("runs")]
+    [InlineData("actions")]
+    [InlineData("content")]
+    public async Task Requests_Throttled_RetrySameRequestUntilSuccessful(string operation)
+    {
+        var attempts = 0;
+        var throttledContent = new List<TrackingContent>();
+        var handler = new MockHttpMessageHandler(_ =>
+        {
+            if (++attempts <= 8)
+            {
+                var content = new TrackingContent();
+                throttledContent.Add(content);
+                var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests) { Content = content };
+                response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.Zero);
+                return response;
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(operation switch
+                {
+                    "discovery" => """{"value":[{"id":"/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Web/sites/app","kind":"workflowapp"}]}""",
+                    "content" => "searchable payload",
+                    _ => """{"value":[]}"""
+                })
+            };
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        await ExecuteRequestAsync(client, operation, CancellationToken.None);
+
+        Assert.Equal(9, handler.CallCount);
+        Assert.Equal(9, handler.Requests.Distinct().Count());
+        var firstRequest = handler.Requests[0];
+        Assert.All(handler.Requests, request =>
+        {
+            Assert.Equal(firstRequest.RequestUri, request.RequestUri);
+            Assert.Equal(firstRequest.Headers.Authorization, request.Headers.Authorization);
+            Assert.Equal(HttpMethod.Get, request.Method);
+        });
+        Assert.All(throttledContent, content => Assert.True(content.Disposed));
+    }
+
+    [Fact]
+    public async Task Requests_RetryAfter_ActuallyWaitsBeforeRetrying()
+    {
+        var attempts = 0;
+        var handler = new MockHttpMessageHandler(_ =>
+        {
+            if (++attempts == 1)
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+                response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(1));
+                return response;
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("payload") };
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        await ExecuteRequestAsync(client, "content", CancellationToken.None);
+
+        Assert.True(stopwatch.Elapsed >= TimeSpan.FromSeconds(1));
+        Assert.Equal(2, handler.CallCount);
+    }
+
+    [Theory]
+    [InlineData("discovery")]
+    [InlineData("runs")]
+    [InlineData("actions")]
+    [InlineData("content")]
+    public async Task Requests_CancelledDuringRetryWait_StopWithoutAnotherRequest(string operation)
+    {
+        using var cts = new CancellationTokenSource();
+        var handler = new MockHttpMessageHandler(_ =>
+        {
+            cts.CancelAfter(TimeSpan.FromMilliseconds(50));
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromHours(1));
+            return response;
+        });
+        var client = new ArmClient(new FakeTokenCredential(), new HttpClient(handler));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => ExecuteRequestAsync(client, operation, cts.Token).WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.Single(handler.Requests);
+    }
+
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(1, 2)]
+    [InlineData(5, 32)]
+    [InlineData(6, 60)]
+    [InlineData(int.MaxValue, 60)]
+    public void GetRetryDelay_MissingHeader_UsesCappedExponentialBackoff(int retryCount, int seconds)
+    {
+        using var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        Assert.Equal(TimeSpan.FromSeconds(seconds), ArmClient.GetRetryDelay(response, retryCount, DateTimeOffset.UtcNow));
+    }
+
+    [Theory]
+    [InlineData(120, 120)]
+    [InlineData(-30, 0)]
+    public void GetRetryDelay_HttpDate_UsesServerDate(int offsetSeconds, int expectedSeconds)
+    {
+        var now = new DateTimeOffset(2026, 10, 22, 9, 0, 0, TimeSpan.Zero);
+        using var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(now.AddSeconds(offsetSeconds));
+        Assert.Equal(TimeSpan.FromSeconds(expectedSeconds), ArmClient.GetRetryDelay(response, 0, now));
+    }
+
+    [Fact]
+    public void GetRetryDelay_ServerDelta_IsNotCappedByFallbackLimit()
+    {
+        using var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(120));
+        Assert.Equal(TimeSpan.FromSeconds(120), ArmClient.GetRetryDelay(response, 0, DateTimeOffset.UtcNow));
+    }
+
+    private static async Task ExecuteRequestAsync(ArmClient client, string operation, CancellationToken ct)
+    {
+        switch (operation)
+        {
+            case "discovery":
+                Assert.Equal("rg", await client.DiscoverResourceGroupAsync("sub", "app", ct));
+                break;
+            case "runs":
+                await foreach (var run in client.ListRunsAsync("sub", "rg", "app", "workflow", null, null, ct)) { }
+                break;
+            case "actions":
+                await foreach (var action in client.ListActionsAsync("sub", "rg", "app", "workflow", "run", ct)) { }
+                break;
+            case "content":
+                Assert.NotNull(await client.FetchContentAsync(
+                    new ContentLink("https://storage.blob.core.windows.net/content?sig=test", 10), ct));
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(operation));
+        }
+    }
+
+    private sealed class TrackingContent : StringContent
+    {
+        public bool Disposed { get; private set; }
+
+        public TrackingContent() : base("throttled") { }
+
+        protected override void Dispose(bool disposing)
+        {
+            Disposed = true;
+            base.Dispose(disposing);
+        }
+    }
+
     private class FakeTokenCredential : TokenCredential
     {
         public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken)

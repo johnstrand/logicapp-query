@@ -143,6 +143,22 @@ public class SearchCommandTests
     }
 
     [Fact]
+    public async Task BuildRunContentAsync_FetchContentFailsWithoutFallback_ReturnsNull()
+    {
+        var client = new ExceptionThrowingFetchArmClient();
+        var command = new SearchCommand(client);
+        var run = new WorkflowRun("run1", new WorkflowRunProperties(
+            "Succeeded",
+            DateTimeOffset.UtcNow,
+            new WorkflowRunTrigger(new ContentLink("https://example.com/content", 100), null)));
+
+        var result = await command.BuildRunContentAsync(
+            run, "subId", "rg", "appName", "workflowName", CancellationToken.None);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
     public async Task BuildRunContentAsync_LimitsConcurrency()
     {
         // Arrange
@@ -360,6 +376,8 @@ public class SearchCommandTests
             var output = testConsole.Output;
             Assert.Contains("match(es)", output);
             Assert.Contains("Searched 2 run(s)", output);
+            Assert.Contains("2 fetched, 0 from cache", output);
+            Assert.DoesNotContain("Could not read content", output);
         }
         finally
         {
@@ -367,6 +385,55 @@ public class SearchCommandTests
             if (Directory.Exists(tempDir))
                 Directory.Delete(tempDir, true);
         }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ReportsFetchedAndCachedRunCounts()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var cache = await RunCache.LoadAsync("appName", "workflowName", tempDir))
+            {
+                await cache.SetAsync("run2", new CachedRun("Failed", DateTimeOffset.UtcNow, string.Empty));
+            }
+
+            var console = new TestConsole();
+            console.Profile.Capabilities.Interactive = false;
+            var command = new SearchCommand(new FakeArmClient(), tempDir, console);
+            await command.ExecuteAsync("subId", "appName", "workflowName", "secretsearchTerm", null, null, CancellationToken.None);
+
+            Assert.Contains("1 fetched, 1 from cache", console.Output);
+
+            var cachedConsole = new TestConsole();
+            cachedConsole.Profile.Capabilities.Interactive = false;
+            command = new SearchCommand(new FakeArmClient(), tempDir, cachedConsole);
+            await command.ExecuteAsync("subId", "appName", "workflowName", "secretsearchTerm", null, null, CancellationToken.None);
+
+            Assert.Contains("0 fetched, 2 from cache", cachedConsole.Output);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task BuildRunContentAsync_RunWithoutPayload_ReturnsEmptyContent()
+    {
+        var client = new FakeArmClient();
+        var command = new SearchCommand(client);
+        var run = new WorkflowRun("run2", new WorkflowRunProperties(
+            "Failed",
+            DateTimeOffset.UtcNow,
+            null));
+
+        var result = await command.BuildRunContentAsync(
+            run, "subId", "rg", "appName", "workflowName", CancellationToken.None);
+
+        Assert.Equal(string.Empty, result);
     }
 
     [Theory]

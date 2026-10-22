@@ -1,4 +1,5 @@
 using Azure.Core;
+using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -15,6 +16,7 @@ internal sealed partial class ArmClient(TokenCredential credential, HttpClient h
     private readonly string _baseUrl = baseUrl.TrimEnd('/');
     private readonly string _armScope = $"{baseUrl.TrimEnd('/')}/.default";
     private readonly string _armHost = new Uri(baseUrl).Host;
+    private readonly ConcurrentDictionary<string, byte> _workflowHosts = new(StringComparer.OrdinalIgnoreCase);
 
     private Task<AccessToken>? _tokenTask;
     private readonly object _tokenLock = new();
@@ -45,6 +47,39 @@ internal sealed partial class ArmClient(TokenCredential credential, HttpClient h
         return token.Token;
     }
 
+    internal static TimeSpan GetRetryDelay(HttpResponseMessage response, int retryCount, DateTimeOffset now)
+    {
+        var retryAfter = response.Headers.RetryAfter;
+        if (retryAfter?.Delta is { } delta)
+            return delta > TimeSpan.Zero ? delta : TimeSpan.Zero;
+        if (retryAfter?.Date is { } date)
+            return date > now ? date - now : TimeSpan.Zero;
+
+        return TimeSpan.FromSeconds(Math.Min(60, Math.Pow(2, Math.Min(retryCount, 6))));
+    }
+
+    async Task<HttpResponseMessage> SendGetAsync(string uri, string? bearer, CancellationToken ct)
+    {
+        var retryCount = 0;
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            if (bearer is not null)
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+
+            var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (response.StatusCode != System.Net.HttpStatusCode.TooManyRequests)
+                return response;
+
+            var delay = GetRetryDelay(response, retryCount, DateTimeOffset.UtcNow);
+            response.Dispose();
+            retryCount = Math.Min(retryCount + 1, 6);
+            Console.Error.WriteLine($"HTTP 429 from {new Uri(uri).Host}. Waiting {delay.TotalSeconds:0.###} seconds before retrying.");
+            await Task.Delay(delay, ct);
+        }
+    }
+
     async Task<T> GetArmJsonAsync<T>(string url, CancellationToken ct)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var parsedUri) ||
@@ -55,9 +90,7 @@ internal sealed partial class ArmClient(TokenCredential credential, HttpClient h
         }
 
         var bearer = await GetBearerTokenAsync(ct);
-        using var req = new HttpRequestMessage(HttpMethod.Get, url);
-        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
-        using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var resp = await SendGetAsync(url, bearer, ct);
 
         if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             throw new UnauthorizedAccessException(
@@ -128,7 +161,9 @@ internal sealed partial class ArmClient(TokenCredential credential, HttpClient h
                               r.Kind?.Contains("workflowapp", StringComparison.OrdinalIgnoreCase) == true)
                           ?? page.Value[0]
                         : page.Value[0];
-                    return ExtractResourceGroup(match.Id);
+                    var resourceGroup = ExtractResourceGroup(match.Id);
+                    _workflowHosts.TryAdd($"{appName}.azurewebsites.net", 0);
+                    return resourceGroup;
                 }
                 nextUrl = page.NextLink;
             }
@@ -201,6 +236,7 @@ internal sealed partial class ArmClient(TokenCredential credential, HttpClient h
     private bool IsAllowedHost(string host)
     {
         return host.Equals(_armHost, StringComparison.OrdinalIgnoreCase) ||
+               _workflowHosts.ContainsKey(host) ||
                host.EndsWith(".blob.core.windows.net", StringComparison.OrdinalIgnoreCase) ||
                host.EndsWith(".file.core.windows.net", StringComparison.OrdinalIgnoreCase);
     }
@@ -246,17 +282,15 @@ internal sealed partial class ArmClient(TokenCredential credential, HttpClient h
             return null;
         }
 
-        using var req = new HttpRequestMessage(HttpMethod.Get, uri);
         if (bearer is not null)
         {
             if (!parsedUri.Host.Equals("management.azure.com", StringComparison.OrdinalIgnoreCase))
             {
                 return null;
             }
-            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
         }
 
-        using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var resp = await SendGetAsync(uri, bearer, ct);
         if (!resp.IsSuccessStatusCode)
             return null;
 
