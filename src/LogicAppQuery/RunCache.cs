@@ -244,22 +244,28 @@ internal sealed class RunCache : IAsyncDisposable
                 {
                     return bytes;
                 }
+
+                File.Delete(keyFilePath);
             }
 
             var key = new byte[32];
             RandomNumberGenerator.Fill(key);
-            File.WriteAllBytes(keyFilePath, key);
+
+            var options = new FileStreamOptions
+            {
+                Mode = FileMode.Create,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+            };
 
             if (!OperatingSystem.IsWindows())
             {
-                try
-                {
-                    File.SetUnixFileMode(keyFilePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-                }
-                catch
-                {
-                    // Ignore if Unix file modes are not supported
-                }
+                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            }
+
+            using (var stream = new FileStream(keyFilePath, options))
+            {
+                stream.Write(key);
             }
 
             return key;

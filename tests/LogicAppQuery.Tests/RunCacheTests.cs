@@ -275,8 +275,43 @@ public class RunCacheTests
             var keyFilePath = Path.Combine(tempDir, "cache.key");
             Assert.True(File.Exists(keyFilePath));
 
+            if (!OperatingSystem.IsWindows())
+            {
+                var mode = File.GetUnixFileMode(keyFilePath);
+                var expected = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+                Assert.Equal(expected, mode);
+            }
+
             var key2 = RunCache.GetOrCreateKey(tempDir);
             Assert.Equal(key1, key2);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void GetOrCreateKey_CorruptedKey_OverwritesWithSecureFileMode()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var keyFilePath = Path.Combine(tempDir, "cache.key");
+            File.WriteAllBytes(keyFilePath, new byte[] { 1, 2, 3 });
+
+            var key = RunCache.GetOrCreateKey(tempDir);
+            Assert.NotNull(key);
+            Assert.Equal(32, key.Length);
+
+            if (!OperatingSystem.IsWindows())
+            {
+                var mode = File.GetUnixFileMode(keyFilePath);
+                var expected = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+                Assert.Equal(expected, mode);
+            }
         }
         finally
         {
