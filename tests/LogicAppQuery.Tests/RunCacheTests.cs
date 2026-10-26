@@ -285,6 +285,48 @@ public class RunCacheTests
         }
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void UnprotectContent_NullOrEmptyInput_ReturnsSameInput(string? input)
+    {
+        var result = RunCache.UnprotectContent(input!);
+        Assert.Equal(input, result);
+    }
+
+    [Fact]
+    public void UnprotectContent_ShortBase64Payload_ReturnsContentOnNonWindows()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            // Valid base64 encoding of 10 bytes (< nonceSize + tagSize = 28 bytes)
+            var shortPayload = Convert.ToBase64String(new byte[10]);
+            var result = RunCache.UnprotectContent(shortPayload);
+            Assert.Equal(shortPayload, result);
+        }
+    }
+
+    [Fact]
+    public void UnprotectContent_DecryptionFailure_ReturnsOriginalContentOnNonWindows()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+            try
+            {
+                // Create random 30 bytes payload (nonce 12 + tag 16 + payload 2) with invalid tag
+                var invalidPayload = Convert.ToBase64String(new byte[30]);
+                var result = RunCache.UnprotectContent(invalidPayload, tempDir);
+                Assert.Equal(invalidPayload, result);
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
     [Fact]
     public void UnprotectContent_InvalidContent_ThrowsCryptographicExceptionOnWindows()
     {
