@@ -169,24 +169,37 @@ internal sealed class RunCache : IAsyncDisposable
 
     public async Task<CachedRun?> TryGetAsync(string runName)
     {
+        string? status = null;
+        string? startTimeStr = null;
+        string? rawContent = null;
+
         await _dbLock.WaitAsync();
         try
         {
             using var command = _connection.CreateCommand();
-        command.CommandText = @"
-            SELECT Status, StartTime, Content
-            FROM Runs
-            WHERE AppName = $AppName AND WorkflowName = $WorkflowName AND RunName = $RunName;
-        ";
-        AddPrimaryKeyParameters(command, runName);
+            command.CommandText = @"
+                SELECT Status, StartTime, Content
+                FROM Runs
+                WHERE AppName = $AppName AND WorkflowName = $WorkflowName AND RunName = $RunName;
+            ";
+            AddPrimaryKeyParameters(command, runName);
 
-        using var reader = await command.ExecuteReaderAsync();
-        if (await reader.ReadAsync())
+            using var reader = await command.ExecuteReaderAsync();
+            if (await reader.ReadAsync())
+            {
+                status = reader.GetString(0);
+                startTimeStr = reader.GetString(1);
+                rawContent = reader.GetString(2);
+            }
+        }
+        finally
         {
-            var status = reader.GetString(0);
-            var startTimeStr = reader.GetString(1);
-            var content = UnprotectContent(reader.GetString(2), _directory);
+            _dbLock.Release();
+        }
 
+        if (status is not null && startTimeStr is not null && rawContent is not null)
+        {
+            var content = UnprotectContent(rawContent, _directory);
             if (DateTimeOffset.TryParse(startTimeStr, out var startTime))
             {
                 return new CachedRun(status, startTime, content);
@@ -194,29 +207,26 @@ internal sealed class RunCache : IAsyncDisposable
         }
 
         return null;
-        }
-        finally
-        {
-            _dbLock.Release();
-        }
     }
 
     public async Task SetAsync(string runName, CachedRun run)
     {
+        var protectedContent = ProtectContent(run.Content, _directory);
+
         await _dbLock.WaitAsync();
         try
         {
             using var command = _connection.CreateCommand();
-        command.CommandText = @"
-            INSERT OR REPLACE INTO Runs (AppName, WorkflowName, RunName, Status, StartTime, Content)
-            VALUES ($AppName, $WorkflowName, $RunName, $Status, $StartTime, $Content);
-        ";
-        AddPrimaryKeyParameters(command, runName);
-        command.Parameters.AddWithValue("$Status", run.Status);
-        command.Parameters.AddWithValue("$StartTime", run.StartTime.ToString("o"));
-        command.Parameters.AddWithValue("$Content", ProtectContent(run.Content, _directory));
+            command.CommandText = @"
+                INSERT OR REPLACE INTO Runs (AppName, WorkflowName, RunName, Status, StartTime, Content)
+                VALUES ($AppName, $WorkflowName, $RunName, $Status, $StartTime, $Content);
+            ";
+            AddPrimaryKeyParameters(command, runName);
+            command.Parameters.AddWithValue("$Status", run.Status);
+            command.Parameters.AddWithValue("$StartTime", run.StartTime.ToString("o"));
+            command.Parameters.AddWithValue("$Content", protectedContent);
 
-        await command.ExecuteNonQueryAsync();
+            await command.ExecuteNonQueryAsync();
         }
         finally
         {
