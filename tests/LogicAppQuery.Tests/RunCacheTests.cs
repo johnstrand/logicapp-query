@@ -243,26 +243,6 @@ public class RunCacheTests
     }
 
     [Fact]
-    public void UnprotectContent_UnencryptedPlaintext_ReturnsPlaintextOnNonWindows()
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
-            try
-            {
-                var legacyPlaintext = "{\"sensitive\":\"data\"}";
-                var result = RunCache.UnprotectContent(legacyPlaintext, tempDir);
-                Assert.Equal(legacyPlaintext, result);
-            }
-            finally
-            {
-                if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, true);
-            }
-        }
-    }
-
-    [Fact]
     public void GetOrCreateKey_CreatesAndPersistsKeyFile()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
@@ -285,19 +265,40 @@ public class RunCacheTests
         }
     }
 
-    [Fact]
-    public void UnprotectContent_InvalidContent_ThrowsCryptographicExceptionOnWindows()
+    [Theory]
+    [InlineData("not_valid_base64_or_encrypted_data!")]
+    [InlineData("SGVsbG8=")] // Valid Base64 ("Hello"), but shorter than 28 bytes (nonce + tag)
+    public void UnprotectContent_InvalidContent_ThrowsCryptographicException(string invalidContent)
     {
-        var invalidContent = "not_valid_base64_or_encrypted_data!";
-
-        if (OperatingSystem.IsWindows())
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
         {
-            Assert.Throws<CryptographicException>(() => RunCache.UnprotectContent(invalidContent));
+            Assert.Throws<CryptographicException>(() => RunCache.UnprotectContent(invalidContent, tempDir));
         }
-        else
+        finally
         {
-            // On non-Windows, DPAPI is skipped and returns raw text.
-            Assert.Equal(invalidContent, RunCache.UnprotectContent(invalidContent));
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void UnprotectContent_TamperedCiphertext_ThrowsCryptographicException()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            var protectedContent = RunCache.ProtectContent("sensitive data", tempDir);
+            var bytes = Convert.FromBase64String(protectedContent);
+            bytes[^1] ^= 0xFF; // Tamper with the last byte
+            var tamperedContent = Convert.ToBase64String(bytes);
+
+            Assert.Throws<CryptographicException>(() => RunCache.UnprotectContent(tamperedContent, tempDir));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
         }
     }
 

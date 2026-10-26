@@ -323,7 +323,7 @@ internal sealed class RunCache : IAsyncDisposable
 
             if (data.Length < nonceSize + tagSize)
             {
-                return content;
+                throw new CryptographicException("Failed to unprotect content due to invalid data length.");
             }
 
             var nonce = data.AsSpan(0, nonceSize);
@@ -338,9 +338,13 @@ internal sealed class RunCache : IAsyncDisposable
 
             return Encoding.UTF8.GetString(plainTextBytes);
         }
-        catch (Exception)
+        catch (FormatException ex)
         {
-            return content;
+            throw new CryptographicException("Failed to unprotect content due to invalid format.", ex);
+        }
+        catch (Exception ex)
+        {
+            throw new CryptographicException("Failed to unprotect content.", ex);
         }
     }
 
