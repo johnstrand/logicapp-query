@@ -275,6 +275,13 @@ public class RunCacheTests
             var keyFilePath = Path.Combine(tempDir, "cache.key");
             Assert.True(File.Exists(keyFilePath));
 
+            if (!OperatingSystem.IsWindows())
+            {
+                var mode = File.GetUnixFileMode(keyFilePath);
+                var expected = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+                Assert.Equal(expected, mode);
+            }
+
             var key2 = RunCache.GetOrCreateKey(tempDir);
             Assert.Equal(key1, key2);
         }

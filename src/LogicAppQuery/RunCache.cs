@@ -248,7 +248,23 @@ internal sealed class RunCache : IAsyncDisposable
 
             var key = new byte[32];
             RandomNumberGenerator.Fill(key);
-            File.WriteAllBytes(keyFilePath, key);
+
+            var options = new FileStreamOptions
+            {
+                Mode = FileMode.Create,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+            };
+
+            if (!OperatingSystem.IsWindows())
+            {
+                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            }
+
+            using (var stream = new FileStream(keyFilePath, options))
+            {
+                stream.Write(key);
+            }
 
             if (!OperatingSystem.IsWindows())
             {
